@@ -1,0 +1,35 @@
+{
+  "name": "git-cinematic-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/cli",
+    "packages/viewer"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build -w packages/core && npm run build -w packages/cli && npm run build -w packages/viewer",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc -b",
+    "demo": "node packages/core/dist/demo-cli.js packages/viewer/public/demo/city.bin",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run e2e",
+    "deploy": "npm run build && bash scripts/deploy.sh packages/viewer/dist",
+    "deploy:dry": "npm run build && bash scripts/deploy.sh packages/viewer/dist --dry-run"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.9",
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^20.19.43",
+    "@types/three": "^0.187.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.4.0",
+    "vitest": "^4.1.12"
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.tsbuild/
+coverage/
+playwright-report/
+test-results/
+.cinematic/
+*.tgz
+.env
+.env.*
+.DS_Store

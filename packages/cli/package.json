@@ -1,0 +1,34 @@
+{
+  "name": "git-cinematic",
+  "version": "0.1.0",
+  "description": "Fly through your git history as a living 3D city.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "git-cinematic": "dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sharkkyyy10/git-cinematic.git"
+  },
+  "keywords": [
+    "git",
+    "visualization",
+    "history",
+    "3d",
+    "city",
+    "hotspots"
+  ],
+  "scripts": {
+    "build": "tsc -b && node build.mjs"
+  },
+  "devDependencies": {
+    "@git-cinematic/core": "^0.1.0"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@git-cinematic/viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node bundle-into-cli.mjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@git-cinematic/core": "^0.1.0",
+    "three": "^0.187.0"
+  }
+}
