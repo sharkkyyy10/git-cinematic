@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Block secrets and locally blocked terms from entering history.
+set -euo pipefail
+git_dir="$(git rev-parse --git-dir)"
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+[[ -z "$staged" ]] && exit 0
+
+if echo "$staged" | grep -Eq '(^|/)\.env($|\.)'; then
+  echo "pre-commit: refusing to commit .env files" >&2
+  exit 1
+fi
+
+diff="$(git diff --cached -U0 --no-color | grep '^+' | grep -v '^+++' || true)"
+if echo "$diff" | grep -Eq '(ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|BEGIN [A-Z ]*PRIVATE KEY)'; then
+  echo "pre-commit: staged changes look like they contain a secret" >&2
+  exit 1
+fi
+
+list="$git_dir/info/blocked-terms"
+if [[ -f "$list" ]]; then
+  while IFS= read -r term; do
+    [[ -z "$term" || "$term" == \#* ]] && continue
+    if echo "$diff" | grep -qiF -- "$term" || echo "$staged" | grep -qiF -- "$term"; then
+      echo "pre-commit: staged changes contain a blocked term (see .git/info/blocked-terms)" >&2
+      exit 1
+    fi
+  done < "$list"
+fi

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Single-author repository: reject co-author trailers and blocked terms.
+set -euo pipefail
+msg_file="$1"
+if grep -qi '^co-authored-by:' "$msg_file"; then
+  echo "commit-msg: Co-Authored-By trailers are not allowed in this repository" >&2
+  exit 1
+fi
+list="$(git rev-parse --git-dir)/info/blocked-terms"
+if [[ -f "$list" ]]; then
+  while IFS= read -r term; do
+    [[ -z "$term" || "$term" == \#* ]] && continue
+    if grep -qiF -- "$term" "$msg_file"; then
+      echo "commit-msg: message contains a blocked term" >&2
+      exit 1
+    fi
+  done < "$list"
+fi
