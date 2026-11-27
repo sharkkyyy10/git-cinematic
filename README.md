@@ -3,6 +3,11 @@
 Fly through your git history as a living 3D city.
 
 ```bash
+npx github:sharkkyyy10/git-cinematic#cli analyze   # no install needed
+npx github:sharkkyyy10/git-cinematic#cli view
+```
+
+```text
 git-cinematic analyze [repo=.] [-o .cinematic/city.bin] [--since 2023-01-01] [--max-commits 50000] [--max-files 20000]
 git-cinematic view    [city=.cinematic/city.bin] [--port 4173] [--no-open]
 ```
