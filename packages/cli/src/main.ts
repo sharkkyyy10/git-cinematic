@@ -1,3 +1,15 @@
-import { PACKAGE_VERSION } from "@git-cinematic/core";
+import { main } from "./cli.js";
 
-process.stdout.write(`git-cinematic ${PACKAGE_VERSION}\n`);
+main(process.argv.slice(2), {
+  out: (s) => process.stdout.write(s),
+  err: (s) => process.stderr.write(s),
+  cwd: process.cwd(),
+}).then(
+  (code) => {
+    process.exitCode = code;
+  },
+  (e: unknown) => {
+    process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exitCode = 1;
+  },
+);

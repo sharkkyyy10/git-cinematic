@@ -48,3 +48,9 @@ export async function resolveRepo(repo: string): Promise<{ root: string; head: s
     throw new GitError("NO_COMMITS", `${root} has no commits yet`);
   }
 }
+
+/** Committer time of HEAD in unix seconds; used as the city timestamp so output is reproducible. */
+export async function headTime(repo: string): Promise<number> {
+  const out = (await git(repo, ["show", "-s", "--format=%ct", "HEAD"])).toString("utf8").trim();
+  return Number.parseInt(out, 10) || 0;
+}
