@@ -89,7 +89,7 @@ else
       form+=(-F "$hash=<$WORK/b64/$hash.b64;type=$mime")
     done
     log "uploading bucket $i/$BUCKETS ($(( ${#form[@]} / 2 )) files)"
-    cf "$WORK/upload.json" "200|201" -H "Authorization: Bearer $UPLOAD_JWT" -X POST "${form[@]}" \
+    cf "$WORK/upload.json" "200|201|202" -H "Authorization: Bearer $UPLOAD_JWT" -X POST "${form[@]}" \
       "$ACC/workers/assets/upload?base64=true"
     node "$HELPER" check "$WORK/upload.json" "asset upload"
     if jwt="$(node "$HELPER" get "$WORK/upload.json" result.jwt)"; then COMPLETION_JWT="$jwt"; fi
