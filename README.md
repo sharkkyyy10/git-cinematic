@@ -73,6 +73,59 @@ Who it is for: tech leads deciding what to refactor first, engineering managers 
 to people who do not read code, consultants and acquirers sizing up an unfamiliar codebase, and new
 hires learning the shape of a system.
 
+## Use it in CI: a code-health gate for every pull request
+
+Add one step to a workflow. It scores the branch, compares it with the target branch, writes the
+report into the job summary, annotates hotspots, and fails the build when health slips:
+
+```yaml
+# .github/workflows/code-health.yml
+name: code health
+on: [pull_request]
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the history is the input
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: sharkkyyy10/git-cinematic@main
+        with:
+          min-health: "60"                       # fail below 60
+          baseline: origin/${{ github.base_ref }} # compare with the target branch
+          max-drop: "5"                          # fail if health drops more than 5 points
+          max-new-hotspots: "0"                  # fail if the change creates a hotspot
+```
+
+The action outputs `health`, `grade` and `passed` for later steps. This repository runs it on
+itself in [`.github/workflows/health.yml`](.github/workflows/health.yml).
+
+The same gate works in any CI from the command line:
+
+```bash
+npx github:sharkkyyy10/git-cinematic#cli analyze -o now.bin
+git worktree add ../base origin/main && npx github:sharkkyyy10/git-cinematic#cli analyze ../base -o base.bin
+npx github:sharkkyyy10/git-cinematic#cli check now.bin --baseline base.bin --min-health 60 --max-drop 5
+```
+
+### A health badge for your README
+
+```bash
+npx github:sharkkyyy10/git-cinematic#cli badge -o .cinematic/health.svg
+```
+
+Commit the SVG and add `![code health](.cinematic/health.svg)` to your README. It is generated
+locally, so it works for private repositories too.
+
+### What is left out
+
+Lock files, changelogs, generated files (minified, protobuf, snapshots) and vendored folders
+(`node_modules`, `vendor`, `dist`, …) change all the time without anyone working on them. They stay in
+the city, but they are never hotspots, findings or part of the health score.
+
 ## What you are looking at
 
 | In the city | Comes from |
@@ -145,15 +198,21 @@ design is in [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).
 ```text
 git-cinematic analyze [repo=.] [-o .cinematic/city.bin] [--since 2023-01-01] [--max-commits 50000] [--max-files 20000]
 git-cinematic view    [city=.cinematic/city.bin] [--port 4173] [--no-open]
-git-cinematic report  [city=.cinematic/city.bin] [-o report.md]
+git-cinematic report  [city=.cinematic/city.bin] [-o report.md] [--baseline old.bin]
+git-cinematic check   [city=.cinematic/city.bin] [--min-health 60] [--baseline old.bin] [--max-drop 5] [--max-new-hotspots 0] [--github]
+git-cinematic badge   [city=.cinematic/city.bin] [-o .cinematic/health.svg] [--label "code health"]
 git-cinematic --version | --help
 ```
 
 - `--since` analyses commits after a date; `--max-commits` keeps the newest *n*.
 - `--max-files` keeps the largest files and folds the rest into one `(other)` building per directory.
 - `analyze` also prints the health score and the main findings.
-- `report` prints the Markdown report, or writes it with `-o`.
-- `analyze` and `report` exit with 1 when there is nothing to read (not a git repository, no commits, no
+- `report` prints the Markdown report, or writes it with `-o`. With `--baseline` it adds what changed
+  since then: the health delta, new and resolved hotspots, newly burning files and what grew most.
+- `check` is the quality gate: it exits with 1 when a rule fails. `--github` (automatic inside
+  GitHub Actions) adds error and hotspot annotations, the job summary and step outputs.
+- `badge` writes an SVG health badge.
+- `analyze`, `report`, `check` and `badge` exit with 1 when there is nothing to read (not a git repository, no commits, no
   or a corrupt city file), and with 2 on bad arguments.
 
 ## Privacy
