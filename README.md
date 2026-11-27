@@ -16,21 +16,28 @@ repository replays as a film, chapter by chapter.
 
 ## Quickstart
 
-You need Node.js 20 or newer and git.
+You need Node.js 20 or newer and git. Run it straight from GitHub, nothing to install:
+
+```bash
+cd path/to/any/repo
+npx github:sharkkyyy10/git-cinematic#cli analyze   # writes .cinematic/city.bin
+npx github:sharkkyyy10/git-cinematic#cli view      # opens the city in your browser
+```
+
+The `cli` branch holds the ready-built package, so the first run downloads about 450 KB and
+starts in seconds. Pass a path to film another repository:
+`npx github:sharkkyyy10/git-cinematic#cli analyze ../my-project`.
+
+### From source
 
 ```bash
 git clone https://github.com/sharkkyyy10/git-cinematic.git
 cd git-cinematic
 npm ci
 npm run build
-
-# Turn this repository into a city and open it in your browser.
 node packages/cli/dist/main.js analyze
 node packages/cli/dist/main.js view
 ```
-
-To film any other repository, pass its path: `node packages/cli/dist/main.js analyze ../my-project`,
-then `node packages/cli/dist/main.js view ../my-project/.cinematic/city.bin`.
 
 `analyze` prints a one-screen summary with the top hotspots and writes `.cinematic/city.bin`.
 `view` serves the viewer on `127.0.0.1` and opens your browser. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop.
@@ -136,6 +143,7 @@ npx playwright install chromium
 npm run check   # lint, typecheck, unit tests, build, browser tests
 npm run demo    # regenerate the seeded demo city (packages/viewer/public/demo/city.bin)
 npm run smoke:pack   # pack the CLI, install it into a temp dir and run it through npx
+scripts/publish-cli-branch.sh   # after npm run build: publish the packed CLI to the cli branch
 ```
 
 The workspace has three packages: [`packages/core`](packages/core) (ingest, metrics, eras, layout
