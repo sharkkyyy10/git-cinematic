@@ -163,8 +163,15 @@ export function showError(shell: Shell, title: string, detail: string): void {
     el("p", { text: detail }),
     el("p", { class: "hint" }, [
       "Make a city for any repository with ",
-      el("code", { text: "npx git-cinematic analyze" }),
-      ", then open the ",
+      el("code", { text: "git-cinematic analyze" }),
+      " (",
+      el("a", {
+        href: "https://github.com/sharkkyyy10/git-cinematic#quickstart",
+        target: "_blank",
+        rel: "noopener",
+        text: "quickstart",
+      }),
+      "), then open the ",
       el("code", { text: ".cinematic/city.bin" }),
       " it writes, or commit it and visit ",
       el("code", { text: "/gh/<owner>/<repo>" }),

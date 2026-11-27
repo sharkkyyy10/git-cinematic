@@ -81,7 +81,8 @@ test("an unknown /gh/ repository shows the friendly error panel", async ({ page 
   const panel = page.getByTestId("error-panel");
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("No city found for does-not/exist");
-  await expect(panel).toContainText("npx git-cinematic analyze");
+  await expect(panel).toContainText("git-cinematic analyze");
+  await expect(panel.getByRole("link", { name: "quickstart" })).toHaveAttribute("href", /#quickstart$/);
   await expect(page.locator("canvas#scene")).toBeVisible();
   await expect(page).toHaveTitle(/^Git-Cinematic/);
 });
