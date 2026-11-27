@@ -1,0 +1,84 @@
+name: Git-Cinematic code health
+description: Score your codebase from its git history, list hotspots and silos in the job summary, and fail the build when code health slips.
+author: sharkkyyy10
+branding:
+  icon: activity
+  color: orange
+
+inputs:
+  min-health:
+    description: Fail when the health score is below this (0 to 100). Empty to only report.
+    required: false
+    default: ""
+  baseline:
+    description: Git ref to compare with, for example origin/main. Needs actions/checkout with fetch-depth 0.
+    required: false
+    default: ""
+  max-drop:
+    description: With a baseline, fail when health drops by more than this many points.
+    required: false
+    default: ""
+  max-new-hotspots:
+    description: With a baseline, fail when more than this many new hotspots appear.
+    required: false
+    default: ""
+  badge:
+    description: Write an SVG health badge to this path, for example .cinematic/health.svg.
+    required: false
+    default: ""
+  city:
+    description: Where to write the city file, so a later step can upload it.
+    required: false
+    default: .cinematic/city.bin
+  cli-ref:
+    description: Branch or commit of the packaged CLI to run.
+    required: false
+    default: cli
+
+outputs:
+  health:
+    description: Health score, 0 to 100.
+    value: ${{ steps.check.outputs.health }}
+  grade:
+    description: Health grade, A to E.
+    value: ${{ steps.check.outputs.grade }}
+  passed:
+    description: true when every check passed.
+    value: ${{ steps.check.outputs.passed }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        GC_MIN_HEALTH: ${{ inputs.min-health }}
+        GC_BASELINE: ${{ inputs.baseline }}
+        GC_MAX_DROP: ${{ inputs.max-drop }}
+        GC_MAX_NEW_HOTSPOTS: ${{ inputs.max-new-hotspots }}
+        GC_BADGE: ${{ inputs.badge }}
+        GC_CITY: ${{ inputs.city }}
+        GC_CLI_REF: ${{ inputs.cli-ref }}
+      run: |
+        set -euo pipefail
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "::error title=Git-Cinematic::The checkout is shallow, so there is no history to analyse. Use actions/checkout with fetch-depth: 0."
+          exit 1
+        fi
+        gc() { npx --yes "github:sharkkyyy10/git-cinematic#${GC_CLI_REF}" "$@"; }
+        work="${RUNNER_TEMP:-/tmp}/git-cinematic"
+        rm -rf "$work" && mkdir -p "$work"
+
+        gc analyze -o "$GC_CITY"
+        args=()
+        if [ -n "$GC_MIN_HEALTH" ]; then args+=(--min-health "$GC_MIN_HEALTH"); fi
+        if [ -n "$GC_BASELINE" ]; then
+          git worktree add --detach "$work/base" "$GC_BASELINE" >/dev/null
+          gc analyze "$work/base" -o "$work/base.bin" >/dev/null
+          git worktree remove --force "$work/base"
+          args+=(--baseline "$work/base.bin")
+          if [ -n "$GC_MAX_DROP" ]; then args+=(--max-drop "$GC_MAX_DROP"); fi
+          if [ -n "$GC_MAX_NEW_HOTSPOTS" ]; then args+=(--max-new-hotspots "$GC_MAX_NEW_HOTSPOTS"); fi
+        fi
+        if [ -n "$GC_BADGE" ]; then gc badge "$GC_CITY" -o "$GC_BADGE"; fi
+        gc check "$GC_CITY" --github "${args[@]}"

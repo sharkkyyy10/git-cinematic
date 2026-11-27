@@ -1,0 +1,27 @@
+name: code health
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Run this repository's own action: score the history, gate on it, write the job summary.
+      - uses: ./
+        with:
+          min-health: "60"
+          baseline: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD~1' }}
+          max-drop: "10"
+          badge: .cinematic/health.svg
