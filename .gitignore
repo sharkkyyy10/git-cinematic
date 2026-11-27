@@ -10,3 +10,4 @@ test-results/
 .env
 .env.*
 .DS_Store
+docs/media/*.webm
