@@ -22,6 +22,7 @@ You need Node.js 20 or newer and git. Run it straight from GitHub, nothing to in
 cd path/to/any/repo
 npx github:sharkkyyy10/git-cinematic#cli analyze   # writes .cinematic/city.bin
 npx github:sharkkyyy10/git-cinematic#cli view      # opens the city in your browser
+npx github:sharkkyyy10/git-cinematic#cli report -o report.md   # the written report
 ```
 
 The `cli` branch holds the ready-built package, so the first run downloads about 450 KB and
@@ -49,6 +50,29 @@ Commit the city file to a public GitHub repository and open
 `.cinematic/city.bin` from the repository's default branch, so the link always shows the latest
 city you committed. You can also drop any `city.bin` onto the page, or use **Open**.
 
+## What it tells you
+
+Git-Cinematic is not only a film. Every city comes with an analysis of the codebase:
+
+- **A health score** from 0 to 100 with a grade, built from four signals you can read: how much
+  of the work is bug fixing, how much code only one person knows, how much is on fire right now,
+  and how much sits in very large files.
+- **Findings in plain language**, most severe first, each with why it matters and what to do:
+  hotspots (big files that never stop changing), files on fire, bug-prone files, knowledge silos
+  (busy files only one person has touched), change magnets (files that drag others along) and
+  dormant giants (large files nobody has touched in a long time). Click a file to fly to it, or
+  light up every match on the map.
+- **Lenses** that recolour the whole city to answer one question at a time: **Risk**, **Bugs**,
+  **Silos**, **Coupling** and **Age**. Press <kbd>1</kbd> to <kbd>6</kbd>.
+- **A guide** (<kbd>?</kbd>) that explains every colour, with live counts and a button to show
+  the matching buildings.
+- **A Markdown report** to hand to your team or a client: **Download report** in the viewer, or
+  `git-cinematic report` in a terminal (handy in CI).
+
+Who it is for: tech leads deciding what to refactor first, engineering managers explaining tech debt
+to people who do not read code, consultants and acquirers sizing up an unfamiliar codebase, and new
+hires learning the shape of a system.
+
 ## What you are looking at
 
 | In the city | Comes from |
@@ -75,8 +99,10 @@ times rank-percentile of lines.
 | <kbd>Space</kbd> | Play or pause the replay |
 | <kbd>←</kbd> / <kbd>→</kbd> | Step one time bucket |
 | <kbd>/</kbd> | Search files (fuzzy); <kbd>Enter</kbd> flies to the match |
+| <kbd>1</kbd>–<kbd>6</kbd> | Cinematic, Risk, Bugs, Silos, Coupling and Age lenses |
+| <kbd>I</kbd> / <kbd>?</kbd> | Insights (health and findings) / the colour guide |
 | <kbd>T</kbd> | Camera tour of the top five hotspots |
-| <kbd>Esc</kbd> | Close the panel, the search or the tour |
+| <kbd>Esc</kbd> | Clear a highlight; close the panel, the search or the tour |
 | <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | Fly over the city (hold <kbd>Shift</kbd> to go faster) |
 | <kbd>Q</kbd> / <kbd>E</kbd> | Turn left or right |
 | Drag, scroll | Orbit and zoom |
@@ -119,12 +145,16 @@ design is in [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).
 ```text
 git-cinematic analyze [repo=.] [-o .cinematic/city.bin] [--since 2023-01-01] [--max-commits 50000] [--max-files 20000]
 git-cinematic view    [city=.cinematic/city.bin] [--port 4173] [--no-open]
+git-cinematic report  [city=.cinematic/city.bin] [-o report.md]
 git-cinematic --version | --help
 ```
 
 - `--since` analyses commits after a date; `--max-commits` keeps the newest *n*.
 - `--max-files` keeps the largest files and folds the rest into one `(other)` building per directory.
-- `analyze` exits with 1 when the path is not a git repository or has no commits, and with 2 on bad arguments.
+- `analyze` also prints the health score and the main findings.
+- `report` prints the Markdown report, or writes it with `-o`.
+- `analyze` and `report` exit with 1 when there is nothing to read (not a git repository, no commits, no
+  or a corrupt city file), and with 2 on bad arguments.
 
 ## Privacy
 
