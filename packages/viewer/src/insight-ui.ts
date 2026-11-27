@@ -355,6 +355,11 @@ export function installInsights(app: App): void {
         "Ambience",
         "Traffic, street lamps, neon, the outskirts and the sky make it a city. They carry no data.",
       ),
+      row(
+        "noise",
+        "Not analysed",
+        "Lock files, changelogs, generated and vendored files change a lot without anyone working on them. They stay in the city but never count as hotspots, findings or health.",
+      ),
       el("h3", { text: "Lenses" }),
       el("p", {
         class: "muted",

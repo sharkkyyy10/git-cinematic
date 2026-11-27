@@ -820,6 +820,9 @@ button.wide {
 .ramp {
   background: linear-gradient(90deg, #0d1729, #008c9e, #ffb81f, #ff2914);
 }
+.swatch.noise {
+  background: repeating-linear-gradient(45deg, #2b3650 0 3px, #141a2a 3px 6px);
+}
 .swatch.highlight {
   background: #40d9ff;
   box-shadow: 0 0 8px #40d9ff;

@@ -1,4 +1,4 @@
-import { type City, FILE_BINARY, FILE_DELETED, hotspots } from "@git-cinematic/core/format";
+import { type City, FILE_BINARY, FILE_DELETED, hotspots, noiseKind } from "@git-cinematic/core/format";
 import { type Finding, fileSignals, findings, type Signals } from "@git-cinematic/core/insights";
 import { Vector3 } from "three";
 import { CityView } from "./city.js";
@@ -182,6 +182,8 @@ export class App {
 
   /** The findings that name this file, e.g. "Hotspot · Knowledge silo". */
   flagsFor(index: number): string {
+    const noise = noiseKind(this.city?.files[index]?.path ?? "");
+    if (noise) return `not analysed (${noise})`;
     const names = this.found.filter((f) => f.files.includes(index)).map((f) => FLAG_NAMES[f.id]);
     return names.length ? names.join(" · ") : "none";
   }
