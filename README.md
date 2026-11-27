@@ -2,10 +2,11 @@
 
 **Fly through your git history as a living 3D city.**
 
-Every file is a building. Directories are districts. Buildings grow and shrink as lines are
-added and deleted, files with a run of bug fixes catch fire, and the files everything else
-changes with glow like calm monoliths. Press play and the whole history of the repository
-replays as a film, chapter by chapter.
+Every file is a building. Directories are districts, with boulevards, traffic and street lamps
+between them. Buildings grow and shrink as lines are added and deleted, files with a run of bug
+fixes catch fire and throw off embers, and the files everything else changes with glow like calm
+monoliths. Fly over it like an open-world game, or press play and the whole history of the
+repository replays as a film, chapter by chapter.
 
 [**Open the live demo →**](https://git-cinematic.shantpaulchanditala.workers.dev)
 
@@ -50,7 +51,10 @@ city you committed. You can also drop any `city.bin` onto the page, or use **Ope
 | Fire (inferno glow, flickering above 60%) | Recent bug-fix commits touching the file, decaying over time |
 | Lit windows | Co-change centrality: how often the file changes together with others |
 | Cool blue rim | Calm monoliths: highly central files that are not on fire |
-| District plates | Directories, nested by depth |
+| District plates | Directories, nested by depth; the biggest are named on the map |
+| Boulevards and side streets | The gaps between directories, with traffic and street lamps |
+| Red aviation beacons | The tallest files at this moment in history |
+| Rising embers | Files burning hottest with recent fixes |
 | Coloured chapters on the timeline | Eras: steady build, expansion, fix wave, cleanup |
 
 The side panel for a file shows its lines, churn, fixes, authors, centrality and hotspot rank.
@@ -66,12 +70,15 @@ times rank-percentile of lines.
 | <kbd>/</kbd> | Search files (fuzzy); <kbd>Enter</kbd> flies to the match |
 | <kbd>T</kbd> | Camera tour of the top five hotspots |
 | <kbd>Esc</kbd> | Close the panel, the search or the tour |
+| <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | Fly over the city (hold <kbd>Shift</kbd> to go faster) |
+| <kbd>Q</kbd> / <kbd>E</kbd> | Turn left or right |
 | Drag, scroll | Orbit and zoom |
+| Minimap | Rotates with the camera, shows files on fire; click to travel there |
 | Click a building | File details, with **Fly to** |
 | **Record** | Records a full replay plus the tour and downloads a WebM video |
 | **Share** | Copies the link to this city |
 
-Reduced-motion settings turn off the fire flicker and the automatic tour.
+Reduced-motion settings turn off the fly-in, the fire flicker, the embers and the automatic tour.
 
 ## How it works
 
@@ -89,7 +96,9 @@ Reduced-motion settings turn off the fire flicker and the automatic tour.
    during the replay.
 6. **Render.** One instanced mesh draws the whole city. The history is uploaded once as a GPU
    texture, and the vertex shader interpolates between buckets, so scrubbing the timeline
-   changes a single number.
+   changes a single number. Traffic, beacons and embers read the same texture, so they follow
+   the replay too. The sky, the procedural outskirts and the traffic are all drawn by shaders,
+   and nothing in the world is random between visits.
 
 The whole pipeline is deterministic. The same repository at the same commit produces a
 byte-identical city file. On a laptop, a synthetic repository with 50,000 commits and 10,000 files
