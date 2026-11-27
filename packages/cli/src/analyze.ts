@@ -5,8 +5,10 @@ import {
   buildModel,
   ERA_KIND_NAMES,
   FILE_DELETED,
+  findings,
   GitError,
   headTime,
+  health,
   hotspots,
   ingest,
   packCity,
@@ -77,14 +79,17 @@ export async function analyzeCommand(argv: readonly string[], io: Io): Promise<n
     }
     if (city.flags & 1)
       lines.push(`  note     smaller files folded into "(other)" buildings (--max-files ${maxFiles})`);
+    const hp = health(city);
+    lines.push(`  health   ${hp.score}/100 (grade ${hp.grade})  ·  details: git-cinematic report`);
     lines.push("", "  eras");
     for (const era of city.eras) {
       const from = fmtDate(city.bucketStart[era.startBucket] as number);
       lines.push(`    ${from}  ${ERA_KIND_NAMES[era.kind].padEnd(12)}  ${era.title.split(" · ")[1] ?? ""}`);
     }
     lines.push("", "  top hotspots (churn × size)");
+    // Same rule as the findings: a file changed once or twice is not a hotspot.
     const top = hotspots(city.files)
-      .filter((h) => h.score > 0)
+      .filter((h) => h.score > 0 && (city.files[h.index]?.churn ?? 0) >= 3)
       .slice(0, 5);
     if (top.length === 0) lines.push("    none yet");
     top.forEach((h, i) => {
@@ -94,6 +99,13 @@ export async function analyzeCommand(argv: readonly string[], io: Io): Promise<n
         `    ${i + 1}. ${truncateMiddle(f.path, 52).padEnd(52)}  ${String(f.churn).padStart(5)} ${f.churn === 1 ? "commit " : "commits"}  ${fmtInt(f.loc).padStart(7)} lines`,
       );
     });
+    const found = findings(city).filter((f) => f.id !== "hotspots");
+    if (found.length) {
+      lines.push("", "  findings");
+      for (const f of found.slice(0, 4)) {
+        lines.push(`    ${f.severity === "high" ? "!!" : f.severity === "medium" ? "! " : "· "} ${f.title}`);
+      }
+    }
     const rel = relative(io.cwd, outPath);
     const shown = rel && !rel.startsWith("..") ? rel : outPath;
     lines.push("", `  wrote ${shown} (${fmtBytes(bytes.length)}) in ${seconds.toFixed(1)} s`, "");

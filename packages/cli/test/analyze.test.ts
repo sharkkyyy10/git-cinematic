@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { unpackCity } from "@git-cinematic/core";
@@ -66,5 +66,32 @@ describe("git-cinematic analyze", () => {
   it("prints version and help", async () => {
     expect((await run(["--version"])).out).toMatch(/^\d+\.\d+\.\d+\n$/);
     expect((await run(["--help"])).out).toContain("git-cinematic analyze");
+  });
+});
+
+describe("git-cinematic report", () => {
+  it("prints a Markdown report for a city and writes it with -o", async () => {
+    const city = join(tmp, "for-report.bin");
+    const a = await run(["analyze", "-o", city]);
+    expect(a.out).toMatch(/health\s+\d+\/100 \(grade [A-E]\)/);
+    const r = await run(["report", city]);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^# git-cinematic: codebase report/);
+    expect(r.out).toMatch(/## Health: \d+\/100/);
+    const md = join(tmp, "out/report.md");
+    const w = await run(["report", city, "-o", md]);
+    expect(w.code).toBe(0);
+    expect(readFileSync(md, "utf8")).toBe(r.out);
+  });
+
+  it("exits 1 without a city and on a corrupt one, 2 on bad arguments", async () => {
+    expect((await run(["report", join(tmp, "missing.bin")])).code).toBe(1);
+    const bad = join(tmp, "bad.bin");
+    writeFileSync(bad, "not a city");
+    const r = await run(["report", bad]);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/not a valid city file/);
+    expect((await run(["report", "a", "b"])).code).toBe(2);
+    expect((await run(["report", "--nope"])).code).toBe(2);
   });
 });

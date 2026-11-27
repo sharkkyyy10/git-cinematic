@@ -10,10 +10,12 @@ npx github:sharkkyyy10/git-cinematic#cli view
 ```text
 git-cinematic analyze [repo=.] [-o .cinematic/city.bin] [--since 2023-01-01] [--max-commits 50000] [--max-files 20000]
 git-cinematic view    [city=.cinematic/city.bin] [--port 4173] [--no-open]
+git-cinematic report  [city=.cinematic/city.bin] [-o report.md]
 ```
 
-`analyze` reads your history with git and writes a small city file; `view` serves the bundled
-3D viewer on 127.0.0.1 and opens it in your browser. Nothing is uploaded: the city file holds
+`analyze` reads your history with git, prints a health score and the main findings, and writes a
+small city file; `view` serves the bundled 3D viewer on 127.0.0.1 and opens it in your browser;
+`report` turns a city into a Markdown report with the health score, findings and the history's eras. Nothing is uploaded: the city file holds
 paths, counts and scores, never file contents.
 
 Project page, live demo and documentation: https://github.com/sharkkyyy10/git-cinematic
