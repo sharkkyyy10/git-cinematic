@@ -4,6 +4,7 @@ export * from "./format.js";
 export * from "./git.js";
 export * from "./gzip.js";
 export * from "./ingest.js";
+export * from "./insights.js";
 export * from "./layout.js";
 export * from "./metrics.js";
 

@@ -10,6 +10,10 @@ export default defineConfig({
         replacement: fileURLToPath(new URL("./packages/core/src/format.ts", import.meta.url)),
       },
       {
+        find: /^@git-cinematic\/core\/insights$/,
+        replacement: fileURLToPath(new URL("./packages/core/src/insights.ts", import.meta.url)),
+      },
+      {
         find: /^@git-cinematic\/core$/,
         replacement: fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)),
       },

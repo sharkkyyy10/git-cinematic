@@ -15,6 +15,10 @@
     "./format": {
       "types": "./dist/format.d.ts",
       "default": "./dist/format.js"
+    },
+    "./insights": {
+      "types": "./dist/insights.d.ts",
+      "default": "./dist/insights.js"
     }
   },
   "scripts": {
