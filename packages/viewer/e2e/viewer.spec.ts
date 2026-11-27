@@ -72,3 +72,64 @@ test("clicking a building opens the panel with its path", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(panel).toBeHidden();
 });
+
+test("an unknown /gh/ repository shows the friendly error panel", async ({ page }) => {
+  await page.route("https://raw.githubusercontent.com/**", (route) =>
+    route.fulfill({ status: 404, contentType: "text/plain", body: "404: Not Found" }),
+  );
+  await page.goto("/gh/does-not/exist");
+  const panel = page.getByTestId("error-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("No city found for does-not/exist");
+  await expect(panel).toContainText("npx git-cinematic analyze");
+  await expect(page.locator("canvas#scene")).toBeVisible();
+  await expect(page).toHaveTitle(/^Git-Cinematic/);
+});
+
+test("a corrupted city file shows the error panel", async ({ page }) => {
+  const garbage = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  await page.route(
+    (url) => url.pathname === "/broken.bin",
+    (route) => route.fulfill({ status: 200, contentType: "application/octet-stream", body: garbage }),
+  );
+  await page.goto("/?src=/broken.bin");
+  const panel = page.getByTestId("error-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("damaged");
+});
+
+test("opening a corrupted file over a loaded city shows the error panel and can go back", async ({ page }) => {
+  await openDemo(page);
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "city.bin",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("definitely not a city"),
+  });
+  const panel = page.getByTestId("error-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("not a city file");
+  await panel.getByRole("button", { name: "Back to the city" }).click();
+  await expect(panel).toBeHidden();
+});
+
+test("search flies to a file and opens its panel", async ({ page }) => {
+  await openDemo(page);
+  await page.keyboard.press("/");
+  await expect(page.getByRole("combobox", { name: "Search files" })).toBeFocused();
+  await page.keyboard.type("billing");
+  await expect(page.locator(".search-results li").first()).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("panel-path")).toContainText("billing");
+});
+
+test("playback shows era title cards and Space toggles play", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForFunction(() => window.__gc?.ready === true);
+  await page.locator("canvas#scene").focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+  await expect(page.locator(".title-card")).toBeVisible();
+  await expect(page.locator(".title-card h2")).not.toHaveText("");
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("button", { name: "Play" })).toBeVisible();
+});

@@ -1,5 +1,6 @@
 import "./style.css";
 import { App } from "./app.js";
+import { installCinematic } from "./cinematic.js";
 import { LoadError, loadCity, resolveSource } from "./load.js";
 import { Stage } from "./scene.js";
 import { installTestHooks } from "./testing.js";
@@ -28,11 +29,8 @@ async function boot(): Promise<void> {
     showError(shell, err.title, err.detail);
     return;
   }
-  // Sharing, recording, the tour and search arrive with the cinematic layer.
-  for (const node of [shell.shareButton, shell.recordButton, shell.tourButton, shell.searchInput.parentElement]) {
-    if (node) node.hidden = true;
-  }
   const app = new App(shell, stage, source);
+  installCinematic(app);
   const hooks = installTestHooks(app);
   shell.loading.textContent = `Loading ${source.label}…`;
   try {
