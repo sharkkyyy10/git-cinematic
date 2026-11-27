@@ -277,15 +277,64 @@ export interface Hotspot {
   score: number;
 }
 
-/** Hotspot score = norm(churn) × norm(loc), ranked descending. Deleted and untouched files score 0. */
+export type NoiseKind = "lock file" | "changelog" | "generated" | "vendored";
+
+const LOCK_FILES = new Set([
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "bun.lockb",
+  "bun.lock",
+  "deno.lock",
+  "cargo.lock",
+  "poetry.lock",
+  "pipfile.lock",
+  "uv.lock",
+  "pdm.lock",
+  "composer.lock",
+  "gemfile.lock",
+  "go.sum",
+  "flake.lock",
+  "package.resolved",
+  "podfile.lock",
+  "pubspec.lock",
+  "mix.lock",
+  "packages.lock.json",
+  "gradle.lockfile",
+]);
+const CHANGELOG = /^(changelog|changes|history|news|releases?)(\.(md|markdown|rst|txt|adoc))?$/i;
+const GENERATED =
+  /(\.min\.(js|css|mjs)|\.map|\.snap|\.pb\.go|_pb2(_grpc)?\.py|\.pb\.(cc|h)|\.generated\.[a-z]+|\.g\.dart|\.freezed\.dart|\.designer\.cs|\.lock)$/i;
+const VENDORED = /(^|\/)(node_modules|vendor|third[_-]party|bower_components|__snapshots__|\.yarn|dist|coverage)\//i;
+
+/**
+ * Files that change a lot without anyone working on them: lock files, changelogs, generated and
+ * vendored code. They stay in the city but are never hotspots, findings or part of the health score.
+ */
+export function noiseKind(path: string): NoiseKind | null {
+  const base = (path.slice(path.lastIndexOf("/") + 1) || path).toLowerCase();
+  if (LOCK_FILES.has(base)) return "lock file";
+  if (CHANGELOG.test(base)) return "changelog";
+  if (VENDORED.test(path)) return "vendored";
+  if (GENERATED.test(base)) return "generated";
+  return null;
+}
+
+/**
+ * Hotspot score = norm(churn) × norm(loc), ranked descending. Deleted, untouched and noise files
+ * (see noiseKind) score 0 and do not count towards the percentiles.
+ */
 export function hotspots(files: readonly Pick<CityFile, "churn" | "loc" | "flags" | "path">[]): Hotspot[] {
-  const churn = rankPercentile(files.map((f) => f.churn));
-  const loc = rankPercentile(files.map((f) => f.loc));
+  const counted = files.map((f) => !(f.flags & FILE_DELETED) && f.churn > 0 && f.loc > 0 && noiseKind(f.path) === null);
+  const idx = files.map((_, i) => i).filter((i) => counted[i]);
+  const churn = rankPercentile(idx.map((i) => (files[i] as CityFile).churn));
+  const loc = rankPercentile(idx.map((i) => (files[i] as CityFile).loc));
+  const score = new Float64Array(files.length);
+  idx.forEach((i, k) => {
+    score[i] = (churn[k] as number) * (loc[k] as number);
+  });
   return files
-    .map((f, index) => ({
-      index,
-      score:
-        f.flags & FILE_DELETED || f.churn === 0 || f.loc === 0 ? 0 : (churn[index] as number) * (loc[index] as number),
-    }))
+    .map((_, index) => ({ index, score: score[index] as number }))
     .sort((a, b) => b.score - a.score || a.index - b.index);
 }

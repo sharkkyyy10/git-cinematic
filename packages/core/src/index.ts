@@ -1,4 +1,6 @@
+export * from "./badge.js";
 export * from "./city.js";
+export * from "./compare.js";
 export * from "./eras.js";
 export * from "./format.js";
 export * from "./git.js";

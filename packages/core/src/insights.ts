@@ -9,6 +9,7 @@ import {
   FILE_BINARY,
   FILE_DELETED,
   hotspots,
+  noiseKind,
   rankPercentile,
 } from "./format.js";
 
@@ -86,6 +87,11 @@ export const BIG_FILE_LINES = 1000;
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
+/** A file that exists now, is not noise (lock files, changelogs, generated, vendored) and so is analysed. */
+export function isCounted(f: Pick<CityFile, "flags" | "loc" | "path">): boolean {
+  return isAlive(f) && noiseKind(f.path) === null;
+}
+
 export function isAlive(f: Pick<CityFile, "flags" | "loc">): boolean {
   return (f.flags & FILE_DELETED) === 0 && f.loc > 0;
 }
@@ -113,21 +119,21 @@ export function fileSignals(city: City): Signals {
   const risk = new Float32Array(F);
   for (const s of hotspots(city.files)) risk[s.index] = s.score;
 
-  const fixed = city.files.map((f) => (isAlive(f) ? f.fixes : 0));
+  const fixed = city.files.map((f) => (isCounted(f) ? f.fixes : 0));
   const fixPct = rankPercentile(fixed);
   const bugs = new Float32Array(F);
   city.files.forEach((f, i) => {
-    if (!isAlive(f) || f.fixes === 0) return;
+    if (!isCounted(f) || f.fixes === 0) return;
     const ratio = f.churn > 0 ? f.fixes / f.churn : 0;
     bugs[i] = clamp01(0.6 * (fixPct[i] ?? 0) + 0.4 * clamp01(ratio * 2));
   });
 
   const team = city.authors.length >= 2;
-  const churnPct = rankPercentile(city.files.map((f) => (isAlive(f) ? f.churn : 0)));
+  const churnPct = rankPercentile(city.files.map((f) => (isCounted(f) ? f.churn : 0)));
   const silos = new Float32Array(F);
   if (team) {
     city.files.forEach((f, i) => {
-      if (!isAlive(f) || f.churn === 0) return;
+      if (!isCounted(f) || f.churn === 0) return;
       if (f.authors === 1) silos[i] = churnPct[i] ?? 0;
       else if (f.authors === 2) silos[i] = 0.4 * (churnPct[i] ?? 0);
     });
@@ -136,7 +142,7 @@ export function fileSignals(city: City): Signals {
   const coupling = new Float32Array(F);
   const age = new Float32Array(F);
   city.files.forEach((f, i) => {
-    if (!isAlive(f)) return;
+    if (!isCounted(f)) return;
     coupling[i] = clamp01(f.centrality);
     const last = lastChange[i] ?? -1;
     age[i] = B > 1 && last >= 0 ? (B - 1 - last) / (B - 1) : 0;
@@ -169,9 +175,10 @@ export function gradeFor(score: number): Health["grade"] {
 }
 
 export function health(city: City, signals = fileSignals(city)): Health {
-  const alive = city.files.map((f, i) => [f, i] as const).filter(([f]) => isAlive(f));
-  const totalChurn = city.files.reduce((s, f) => s + f.churn, 0);
-  const totalFixes = city.files.reduce((s, f) => s + f.fixes, 0);
+  const alive = city.files.map((f, i) => [f, i] as const).filter(([f]) => isCounted(f));
+  const signal = city.files.filter((f) => noiseKind(f.path) === null);
+  const totalChurn = signal.reduce((s, f) => s + f.churn, 0);
+  const totalFixes = signal.reduce((s, f) => s + f.fixes, 0);
   const aliveLoc = alive.reduce((s, [f]) => s + f.loc, 0);
 
   const fixShare = totalChurn > 0 ? totalFixes / totalChurn : 0;
@@ -243,7 +250,7 @@ function quantile(sorted: readonly number[], q: number): number {
 export function findings(city: City, signals = fileSignals(city)): Finding[] {
   const out: Finding[] = [];
   const files = city.files;
-  const alive = files.map((_, i) => i).filter((i) => isAlive(files[i] as CityFile));
+  const alive = files.map((_, i) => i).filter((i) => isCounted(files[i] as CityFile));
   const by = (key: (i: number) => number) => (a: number, b: number) => key(b) - key(a) || a - b;
   const f = (i: number) => files[i] as CityFile;
 
@@ -365,8 +372,13 @@ const isoDate = (unix: number) => new Date(unix * 1000).toISOString().slice(0, 1
 const md = (s: string) => s.replace(/([\\`*_[\]|<>])/g, "\\$1");
 const int = (n: number) => Math.round(n).toLocaleString("en-US");
 
+export interface ReportOptions {
+  /** Markdown inserted after the health section, e.g. renderComparison() against a baseline. */
+  since?: string;
+}
+
 /** A Markdown report a team lead or a client can read without opening the viewer. */
-export function renderReport(city: City): string {
+export function renderReport(city: City, opts: ReportOptions = {}): string {
   const signals = fileSignals(city);
   const hp = health(city, signals);
   const found = findings(city, signals);
@@ -388,10 +400,14 @@ export function renderReport(city: City): string {
     "The score is a heuristic. Use it to compare this repository with itself over time, not with other teams.",
     "",
   );
+  if (opts.since) L.push(opts.since.trimEnd(), "");
 
   L.push("## At a glance", "");
   L.push(`- **${int(alive.length)}** files today, **${int(alive.reduce((s, f) => s + f.loc, 0))}** lines`);
   if (deleted) L.push(`- **${int(deleted)}** files that existed once and were deleted`);
+  const noise = alive.filter((f) => noiseKind(f.path) !== null).length;
+  if (noise)
+    L.push(`- **${int(noise)}** lock files, changelogs, generated or vendored files (shown, but not analysed)`);
   if (binary) L.push(`- **${int(binary)}** binary files (shown, but not counted in lines)`);
   L.push(`- **${int(city.authors.length)}** author${city.authors.length === 1 ? "" : "s"}`);
   L.push(`- **${city.eras.length}** era${city.eras.length === 1 ? "" : "s"} in the history`, "");
