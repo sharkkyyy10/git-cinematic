@@ -22,6 +22,16 @@ describe("segmentSeries", () => {
     ]);
   });
 
+  it("cuts out an episode in the middle of a long segment", () => {
+    // No single cut removes 15% of the error here, but cutting around the burst does.
+    const series = [...new Array(40).fill(10), ...new Array(6).fill(40), ...new Array(40).fill(10)];
+    expect(segmentSeries(series)).toEqual([
+      { start: 0, end: 39 },
+      { start: 40, end: 45 },
+      { start: 46, end: 85 },
+    ]);
+  });
+
   it("does not split flat or noisy-but-flat series", () => {
     expect(segmentSeries(new Array(20).fill(4))).toEqual([{ start: 0, end: 19 }]);
   });

@@ -18,10 +18,21 @@ function sse(prefix: Float64Array, prefixSq: Float64Array, s: number, e: number)
   return sq - (sum * sum) / n;
 }
 
+interface Split {
+  seg: number;
+  /** Cut points: the segment ends after each one (one cut = binary split, two = middle block). */
+  cuts: number[];
+  gain: number;
+}
+
 /**
- * Binary segmentation on the mean. Repeatedly applies the single split (over all current segments)
- * with the largest squared-error reduction, as long as it removes more than MIN_GAIN of that
- * segment's error, both halves keep MIN_SEGMENT buckets and fewer than MAX_SEGMENTS exist.
+ * Binary segmentation on the mean. Repeatedly applies the split (over all current segments) with
+ * the largest squared-error reduction, as long as it removes more than MIN_GAIN of that segment's
+ * error, every part keeps MIN_SEGMENT buckets and at most MAX_SEGMENTS exist.
+ *
+ * When no single cut of a segment qualifies, the segment may instead be cut around a middle block
+ * (circular binary segmentation). Plain binary segmentation misses an episode in the middle of a
+ * long segment: neither cut alone explains enough of the error, though both together do.
  */
 export function segmentSeries(series: ArrayLike<number>): Segment[] {
   const n = series.length;
@@ -33,22 +44,46 @@ export function segmentSeries(series: ArrayLike<number>): Segment[] {
     prefix[i + 1] = (prefix[i] as number) + x;
     prefixSq[i + 1] = (prefixSq[i] as number) + x * x;
   }
+  const err = (s: number, e: number) => sse(prefix, prefixSq, s, e);
   const segments: Segment[] = [{ start: 0, end: n - 1 }];
   while (segments.length < MAX_SEGMENTS) {
-    let best: { seg: number; at: number; gain: number } | null = null;
+    let best: Split | null = null;
+    const consider = (cand: Split) => {
+      if (!best || cand.gain > best.gain + 1e-9) best = cand;
+    };
     segments.forEach((seg, si) => {
-      const total = sse(prefix, prefixSq, seg.start, seg.end);
+      const total = err(seg.start, seg.end);
       if (!(total > 0)) return;
+      let single: Split | null = null;
       for (let at = seg.start + MIN_SEGMENT - 1; at <= seg.end - MIN_SEGMENT; at++) {
-        const split = sse(prefix, prefixSq, seg.start, at) + sse(prefix, prefixSq, at + 1, seg.end);
-        const gain = total - split;
-        if (gain > MIN_GAIN * total && (!best || gain > best.gain + 1e-9)) best = { seg: si, at, gain };
+        const gain = total - err(seg.start, at) - err(at + 1, seg.end);
+        if (gain > MIN_GAIN * total && (!single || gain > single.gain + 1e-9)) single = { seg: si, cuts: [at], gain };
       }
+      if (single) {
+        consider(single);
+        return;
+      }
+      if (segments.length + 2 > MAX_SEGMENTS) return;
+      let block: Split | null = null;
+      for (let a = seg.start + MIN_SEGMENT - 1; a <= seg.end - 2 * MIN_SEGMENT; a++) {
+        for (let b = a + MIN_SEGMENT; b <= seg.end - MIN_SEGMENT; b++) {
+          const gain = total - err(seg.start, a) - err(a + 1, b) - err(b + 1, seg.end);
+          if (gain > MIN_GAIN * total && (!block || gain > block.gain + 1e-9)) block = { seg: si, cuts: [a, b], gain };
+        }
+      }
+      if (block) consider(block);
     });
     if (!best) break;
-    const { seg, at } = best as { seg: number; at: number };
+    const { seg, cuts } = best as Split;
     const s = segments[seg] as Segment;
-    segments.splice(seg, 1, { start: s.start, end: at }, { start: at + 1, end: s.end });
+    const parts: Segment[] = [];
+    let start = s.start;
+    for (const c of cuts) {
+      parts.push({ start, end: c });
+      start = c + 1;
+    }
+    parts.push({ start, end: s.end });
+    segments.splice(seg, 1, ...parts);
   }
   return segments;
 }
@@ -80,8 +115,7 @@ export function classify(series: BucketSeries, seg: Segment, activityMedian: num
 
 /**
  * The directory with the most churn inside a segment: the top-level directory, refined one level
- * further while a single child holds at least half of the churn (so monorepos read as
- * `packages/viewer` rather than `packages`).
+ * further into its busiest child, so monorepos read as `packages/viewer` rather than `packages`.
  */
 export function busiestDir(
   paths: readonly string[],
@@ -99,7 +133,6 @@ export function busiestDir(
   let prefix: string[] = [];
   for (let depth = 0; depth < maxDepth; depth++) {
     const totals = new Map<string, number>();
-    let all = 0;
     paths.forEach((p, f) => {
       const parts = p.split("/");
       if (parts.length - 1 <= depth) return;
@@ -107,7 +140,6 @@ export function busiestDir(
       const key = parts[depth] as string;
       const c = churn[f] as number;
       totals.set(key, (totals.get(key) ?? 0) + c);
-      all += c;
     });
     let bestKey: string | null = null;
     let bestVal = 0;
@@ -118,7 +150,7 @@ export function busiestDir(
         bestKey = key;
       }
     }
-    if (bestKey === null || (depth > 0 && bestVal * 2 < all)) break;
+    if (bestKey === null) break;
     prefix = [...prefix, bestKey];
   }
   return prefix.length ? prefix.join("/") : "(root)";
