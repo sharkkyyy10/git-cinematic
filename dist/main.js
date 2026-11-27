@@ -215,13 +215,425 @@ function rankPercentile(values) {
   }
   return out;
 }
+var LOCK_FILES = /* @__PURE__ */ new Set([
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "bun.lockb",
+  "bun.lock",
+  "deno.lock",
+  "cargo.lock",
+  "poetry.lock",
+  "pipfile.lock",
+  "uv.lock",
+  "pdm.lock",
+  "composer.lock",
+  "gemfile.lock",
+  "go.sum",
+  "flake.lock",
+  "package.resolved",
+  "podfile.lock",
+  "pubspec.lock",
+  "mix.lock",
+  "packages.lock.json",
+  "gradle.lockfile"
+]);
+var CHANGELOG = /^(changelog|changes|history|news|releases?)(\.(md|markdown|rst|txt|adoc))?$/i;
+var GENERATED = /(\.min\.(js|css|mjs)|\.map|\.snap|\.pb\.go|_pb2(_grpc)?\.py|\.pb\.(cc|h)|\.generated\.[a-z]+|\.g\.dart|\.freezed\.dart|\.designer\.cs|\.lock)$/i;
+var VENDORED = /(^|\/)(node_modules|vendor|third[_-]party|bower_components|__snapshots__|\.yarn|dist|coverage)\//i;
+function noiseKind(path) {
+  const base = (path.slice(path.lastIndexOf("/") + 1) || path).toLowerCase();
+  if (LOCK_FILES.has(base))
+    return "lock file";
+  if (CHANGELOG.test(base))
+    return "changelog";
+  if (VENDORED.test(path))
+    return "vendored";
+  if (GENERATED.test(base))
+    return "generated";
+  return null;
+}
 function hotspots(files) {
-  const churn = rankPercentile(files.map((f) => f.churn));
-  const loc = rankPercentile(files.map((f) => f.loc));
-  return files.map((f, index) => ({
-    index,
-    score: f.flags & FILE_DELETED || f.churn === 0 || f.loc === 0 ? 0 : churn[index] * loc[index]
-  })).sort((a, b) => b.score - a.score || a.index - b.index);
+  const counted = files.map((f) => !(f.flags & FILE_DELETED) && f.churn > 0 && f.loc > 0 && noiseKind(f.path) === null);
+  const idx = files.map((_, i) => i).filter((i) => counted[i]);
+  const churn = rankPercentile(idx.map((i) => files[i].churn));
+  const loc = rankPercentile(idx.map((i) => files[i].loc));
+  const score = new Float64Array(files.length);
+  idx.forEach((i, k) => {
+    score[i] = churn[k] * loc[k];
+  });
+  return files.map((_, index) => ({ index, score: score[index] })).sort((a, b) => b.score - a.score || a.index - b.index);
+}
+
+// ../core/dist/insights.js
+var LENSES = [
+  {
+    id: "risk",
+    label: "Risk",
+    question: "Where will the next problem come from?",
+    low: "small or quiet",
+    high: "large and always changing",
+    explain: "Hotspot score: how large a file is times how often it changes, both as rank percentiles. Most defects and slow reviews concentrate in a few such files."
+  },
+  {
+    id: "bugs",
+    label: "Bugs",
+    question: "Which files keep needing fixes?",
+    low: "no fixes",
+    high: "many fixes",
+    explain: "Fix commits touching the file (messages like fix, bug, hotfix, revert), weighted by how large a share of its changes were fixes."
+  },
+  {
+    id: "silos",
+    label: "Silos",
+    question: "Which busy files depend on one person?",
+    low: "shared knowledge",
+    high: "one author, lots of change",
+    explain: "Files with a single author ranked by how often they change; two-author files count a little. If that person leaves, nobody else knows this code."
+  },
+  {
+    id: "coupling",
+    label: "Coupling",
+    question: "Which files drag others along when they change?",
+    low: "independent",
+    high: "changes with everything",
+    explain: "Co-change centrality (PageRank over files committed together). Edits here ripple into many other files and need wider review."
+  },
+  {
+    id: "age",
+    label: "Age",
+    question: "What has nobody touched in a long time?",
+    low: "changed recently",
+    high: "untouched for longest",
+    explain: "Time since the file last visibly changed, relative to the whole history. Old, large files are either rock-solid or forgotten."
+  }
+];
+var HOT_NOW = 0.25;
+var HOTSPOT_MIN = 0.8;
+var BIG_FILE_LINES = 1e3;
+var clamp01 = (v) => Math.min(1, Math.max(0, v));
+function isCounted(f) {
+  return isAlive(f) && noiseKind(f.path) === null;
+}
+function isAlive(f) {
+  return (f.flags & FILE_DELETED) === 0 && f.loc > 0;
+}
+function fileSignals(city) {
+  const F = city.files.length;
+  const B = city.bucketStart.length;
+  const h = city.history;
+  const lastChange = new Int32Array(F).fill(-1);
+  const heatNow = new Float32Array(F);
+  for (let i = 0; i < F; i++) {
+    let prevLoc = 0;
+    let prevHeat = 0;
+    for (let b = 0; b < B; b++) {
+      const loc = h[(i * B + b) * 2] ?? 0;
+      const heat = h[(i * B + b) * 2 + 1] ?? 0;
+      if (loc !== prevLoc || heat > prevHeat)
+        lastChange[i] = b;
+      prevLoc = loc;
+      prevHeat = heat;
+    }
+    if (B > 0)
+      heatNow[i] = (h[(i * B + B - 1) * 2 + 1] ?? 0) / 65535;
+  }
+  const risk = new Float32Array(F);
+  for (const s of hotspots(city.files))
+    risk[s.index] = s.score;
+  const fixed = city.files.map((f) => isCounted(f) ? f.fixes : 0);
+  const fixPct = rankPercentile(fixed);
+  const bugs = new Float32Array(F);
+  city.files.forEach((f, i) => {
+    if (!isCounted(f) || f.fixes === 0)
+      return;
+    const ratio = f.churn > 0 ? f.fixes / f.churn : 0;
+    bugs[i] = clamp01(0.6 * (fixPct[i] ?? 0) + 0.4 * clamp01(ratio * 2));
+  });
+  const team = city.authors.length >= 2;
+  const churnPct = rankPercentile(city.files.map((f) => isCounted(f) ? f.churn : 0));
+  const silos = new Float32Array(F);
+  if (team) {
+    city.files.forEach((f, i) => {
+      if (!isCounted(f) || f.churn === 0)
+        return;
+      if (f.authors === 1)
+        silos[i] = churnPct[i] ?? 0;
+      else if (f.authors === 2)
+        silos[i] = 0.4 * (churnPct[i] ?? 0);
+    });
+  }
+  const coupling = new Float32Array(F);
+  const age = new Float32Array(F);
+  city.files.forEach((f, i) => {
+    if (!isCounted(f))
+      return;
+    coupling[i] = clamp01(f.centrality);
+    const last = lastChange[i] ?? -1;
+    age[i] = B > 1 && last >= 0 ? (B - 1 - last) / (B - 1) : 0;
+  });
+  return { risk, bugs, silos, coupling, age, lastChange, heatNow };
+}
+var pct = (v) => `${Math.round(v * 100)}%`;
+function gradeFor(score) {
+  return score >= 85 ? "A" : score >= 70 ? "B" : score >= 55 ? "C" : score >= 40 ? "D" : "E";
+}
+function health(city, signals = fileSignals(city)) {
+  const alive = city.files.map((f, i) => [f, i]).filter(([f]) => isCounted(f));
+  const signal = city.files.filter((f) => noiseKind(f.path) === null);
+  const totalChurn = signal.reduce((s, f) => s + f.churn, 0);
+  const totalFixes = signal.reduce((s, f) => s + f.fixes, 0);
+  const aliveLoc = alive.reduce((s, [f]) => s + f.loc, 0);
+  const fixShare = totalChurn > 0 ? totalFixes / totalChurn : 0;
+  const parts = [
+    {
+      id: "fixLoad",
+      label: "Fix load",
+      score: clamp01(1 - fixShare / 0.4),
+      detail: `${pct(fixShare)} of file changes were bug fixes`,
+      weight: 0.35
+    }
+  ];
+  if (city.authors.length >= 2) {
+    const soloLoc = alive.filter(([f]) => f.authors === 1).reduce((s, [f]) => s + f.loc, 0);
+    const share = aliveLoc > 0 ? soloLoc / aliveLoc : 0;
+    parts.push({
+      id: "knowledge",
+      label: "Knowledge spread",
+      score: clamp01(1 - share),
+      detail: `${pct(share)} of the code has only one author`,
+      weight: 0.25
+    });
+  }
+  const hot = alive.filter(([, i]) => (signals.heatNow[i] ?? 0) >= HOT_NOW).length;
+  const hotShare = alive.length ? hot / alive.length : 0;
+  parts.push({
+    id: "fireNow",
+    label: "Fires right now",
+    score: clamp01(1 - hotShare / 0.15),
+    detail: `${hot} of ${alive.length} files are hot with recent fixes`,
+    weight: 0.2
+  });
+  const bigLoc = alive.filter(([f]) => f.loc > BIG_FILE_LINES).reduce((s, [f]) => s + f.loc, 0);
+  const bigShare = aliveLoc > 0 ? bigLoc / aliveLoc : 0;
+  parts.push({
+    id: "fileSize",
+    label: "File size",
+    score: clamp01(1 - bigShare / 0.5),
+    detail: `${pct(bigShare)} of the code sits in files over ${BIG_FILE_LINES.toLocaleString("en-US")} lines`,
+    weight: 0.2
+  });
+  const totalWeight = parts.reduce((s, p) => s + p.weight, 0);
+  const score = Math.round(100 * parts.reduce((s, p) => s + p.score * p.weight, 0) / totalWeight);
+  return { score, grade: gradeFor(score), parts };
+}
+var TOP = 5;
+function quantile(sorted, q) {
+  if (sorted.length === 0)
+    return 0;
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))];
+}
+function findings(city, signals = fileSignals(city)) {
+  const out = [];
+  const files = city.files;
+  const alive = files.map((_, i) => i).filter((i) => isCounted(files[i]));
+  const by = (key) => (a, b) => key(b) - key(a) || a - b;
+  const f = (i) => files[i];
+  const focus = (list2, share) => list2.slice(0, Math.max(TOP, Math.ceil(alive.length * share)));
+  const hot = focus(alive.filter((i) => (signals.risk[i] ?? 0) >= HOTSPOT_MIN && f(i).churn >= 3).sort(by((i) => signals.risk[i] ?? 0)), 0.02);
+  if (hot.length) {
+    out.push({
+      id: "hotspots",
+      severity: (signals.risk[hot[0]] ?? 0) >= 0.9 ? "high" : "medium",
+      title: `${hot.length} hotspot${hot.length === 1 ? "" : "s"}: large files that never stop changing`,
+      why: "Defects, merge conflicts and slow reviews concentrate in files that are both big and busy.",
+      action: "Start refactoring and testing here: split the largest, and add tests before the next change.",
+      files: hot.slice(0, TOP),
+      matches: hot,
+      lens: "risk"
+    });
+  }
+  const fire = alive.filter((i) => (signals.heatNow[i] ?? 0) >= HOT_NOW).sort(by((i) => signals.heatNow[i] ?? 0));
+  if (fire.length) {
+    out.push({
+      id: "fire",
+      severity: fire.length >= 5 ? "high" : "medium",
+      title: `${fire.length} file${fire.length === 1 ? " is" : "s are"} on fire right now`,
+      why: "These files received bug fixes recently and repeatedly. Fixes that keep coming usually mean the cause is not fixed yet.",
+      action: "Look for the root cause before the next patch: a missing test, an unclear contract or a design limit.",
+      files: fire.slice(0, TOP),
+      matches: fire,
+      lens: "bugs"
+    });
+  }
+  const buggy = focus(alive.filter((i) => f(i).fixes >= 2).sort(by((i) => f(i).fixes * 10 + (signals.bugs[i] ?? 0))), 0.03);
+  if (buggy.length) {
+    out.push({
+      id: "bugs",
+      severity: f(buggy[0]).fixes >= 5 ? "high" : "medium",
+      title: `${buggy.length} bug-prone file${buggy.length === 1 ? "" : "s"}`,
+      why: "Files fixed again and again are where users feel the bugs. A file's past fix rate is one of the best predictors of its future bugs.",
+      action: "Give these files an owner, stronger tests and a review checklist.",
+      files: buggy.slice(0, TOP),
+      matches: buggy,
+      lens: "bugs"
+    });
+  }
+  if (city.authors.length >= 2) {
+    const silo = alive.filter((i) => f(i).authors === 1 && f(i).churn >= 3).sort(by((i) => f(i).churn));
+    if (silo.length) {
+      out.push({
+        id: "silos",
+        severity: silo.length >= 10 ? "high" : "medium",
+        title: `${silo.length} knowledge silo${silo.length === 1 ? "" : "s"}: busy files only one person has touched`,
+        why: "If that person is away or leaves, nobody else understands these files. This is the bus factor, file by file.",
+        action: "Pair on the next change, or rotate reviews so a second person learns each file.",
+        files: silo.slice(0, TOP),
+        matches: silo,
+        lens: "silos"
+      });
+    }
+  } else if (alive.length) {
+    out.push({
+      id: "solo",
+      severity: "low",
+      title: "Single-author repository",
+      why: "Every file has one author, so all knowledge lives with one person.",
+      action: "Fine for a personal project. Before handing it over, document the busiest files first.",
+      files: [],
+      matches: []
+    });
+  }
+  const hubs = alive.filter((i) => f(i).centrality >= 0.6).sort(by((i) => f(i).centrality));
+  if (hubs.length) {
+    out.push({
+      id: "coupling",
+      severity: hubs.length >= 8 ? "medium" : "low",
+      title: `${hubs.length} change magnet${hubs.length === 1 ? "" : "s"}: files that change together with many others`,
+      why: "A change here usually means changes elsewhere too, so estimates slip and reviews grow.",
+      action: "Check whether these are shared configs or real tangles; extract stable interfaces where they are tangles.",
+      files: hubs.slice(0, TOP),
+      matches: hubs,
+      lens: "coupling"
+    });
+  }
+  const sortedLoc = alive.map((i) => f(i).loc).sort((a, b) => a - b);
+  const bigLine = Math.max(300, quantile(sortedLoc, 0.75));
+  const dormant = alive.filter((i) => f(i).loc >= bigLine && (signals.age[i] ?? 0) >= 0.5).sort(by((i) => f(i).loc));
+  if (dormant.length) {
+    out.push({
+      id: "dormant",
+      severity: "low",
+      title: `${dormant.length} dormant giant${dormant.length === 1 ? "" : "s"}: large files untouched for a long time`,
+      why: "Old, large, quiet files are either rock-solid or forgotten. Forgotten ones break the day someone has to change them.",
+      action: "Confirm each still has an owner and tests, or mark it for deletion.",
+      files: dormant.slice(0, TOP),
+      matches: dormant,
+      lens: "age"
+    });
+  }
+  const rank = { high: 0, medium: 1, low: 2 };
+  return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
+}
+var isoDate = (unix) => new Date(unix * 1e3).toISOString().slice(0, 10);
+var md = (s) => s.replace(/([\\`*_[\]|<>])/g, "\\$1");
+var int = (n) => Math.round(n).toLocaleString("en-US");
+function renderReport(city, opts = {}) {
+  const signals = fileSignals(city);
+  const hp = health(city, signals);
+  const found = findings(city, signals);
+  const alive = city.files.filter(isAlive);
+  const deleted = city.files.filter((f) => f.flags & FILE_DELETED).length;
+  const binary = alive.filter((f) => f.flags & FILE_BINARY).length;
+  const B = city.bucketStart.length;
+  const from = B ? isoDate(city.bucketStart[0]) : isoDate(city.generatedAt);
+  const to = isoDate(city.generatedAt);
+  const L = [];
+  L.push(`# ${md(city.repoName)}: codebase report`, "");
+  L.push(`Generated by Git-Cinematic from the history between ${from} and ${to}.`, "");
+  L.push(`## Health: ${hp.score}/100 (grade ${hp.grade})`, "");
+  L.push("| Signal | Score | What it measures |", "|---|---:|---|");
+  for (const p of hp.parts)
+    L.push(`| ${p.label} | ${Math.round(p.score * 100)} | ${md(p.detail)} |`);
+  L.push("", "The score is a heuristic. Use it to compare this repository with itself over time, not with other teams.", "");
+  if (opts.since)
+    L.push(opts.since.trimEnd(), "");
+  L.push("## At a glance", "");
+  L.push(`- **${int(alive.length)}** files today, **${int(alive.reduce((s, f) => s + f.loc, 0))}** lines`);
+  if (deleted)
+    L.push(`- **${int(deleted)}** files that existed once and were deleted`);
+  const noise = alive.filter((f) => noiseKind(f.path) !== null).length;
+  if (noise)
+    L.push(`- **${int(noise)}** lock files, changelogs, generated or vendored files (shown, but not analysed)`);
+  if (binary)
+    L.push(`- **${int(binary)}** binary files (shown, but not counted in lines)`);
+  L.push(`- **${int(city.authors.length)}** author${city.authors.length === 1 ? "" : "s"}`);
+  L.push(`- **${city.eras.length}** era${city.eras.length === 1 ? "" : "s"} in the history`, "");
+  if (city.eras.length) {
+    L.push("## The story so far", "", "| From | Era | Where most of the work went |", "|---|---|---|");
+    for (const e of city.eras) {
+      const start = isoDate(city.bucketStart[e.startBucket] ?? city.generatedAt);
+      L.push(`| ${start} | ${ERA_KIND_NAMES[e.kind]} | ${md(e.title.split(" \xB7 ")[1] ?? "")} |`);
+    }
+    L.push("");
+  }
+  L.push("## Findings", "");
+  if (found.length === 0)
+    L.push("Nothing stands out yet. Come back when there is more history.", "");
+  for (const x of found) {
+    L.push(`### ${x.severity === "high" ? "\u{1F534}" : x.severity === "medium" ? "\u{1F7E0}" : "\u{1F535}"} ${md(x.title)}`, "");
+    L.push(`**Why it matters:** ${x.why}`, "", `**What to do:** ${x.action}`, "");
+    if (x.files.length) {
+      L.push("| File | Lines | Commits | Fixes | Authors |", "|---|---:|---:|---:|---:|");
+      for (const i of x.files) {
+        const f = city.files[i];
+        if (f)
+          L.push(`| \`${f.path.replace(/`/g, "'")}\` | ${int(f.loc)} | ${int(f.churn)} | ${int(f.fixes)} | ${int(f.authors)} |`);
+      }
+      L.push("");
+    }
+  }
+  L.push("## How to read this", "");
+  for (const l of LENSES)
+    L.push(`- **${l.label}:** ${l.explain}`);
+  L.push("", "Commits that touch more than 50 files (reformats, vendor drops, bulk renames) are left out of churn, fixes and coupling.", "The analysis ran locally. It reads file paths, line counts, author display names and commit subjects; no source code or messages are stored.", "");
+  return L.join("\n");
+}
+
+// ../core/dist/badge.js
+var COLORS = {
+  A: "#2ea44f",
+  B: "#7cb82f",
+  C: "#dfb317",
+  D: "#fe7d37",
+  E: "#e05d44"
+};
+function textWidth(s) {
+  let w = 0;
+  for (const ch of s)
+    w += /[ijlI.,:;|!' ]/.test(ch) ? 3.6 : /[mwMW]/.test(ch) ? 10 : /[A-Z0-9]/.test(ch) ? 7.6 : 6.6;
+  return Math.ceil(w);
+}
+var esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function renderBadge(score, label = "code health") {
+  const grade = gradeFor(score);
+  const value = `${score} ${grade}`;
+  const lw = textWidth(label) + 12;
+  const vw = textWidth(value) + 12;
+  const w = lw + vw;
+  const title = esc(`${label}: ${score}/100 (grade ${grade})`);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="${title}">
+<title>${title}</title>
+<linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+<clipPath id="r"><rect width="${w}" height="20" rx="3" fill="#fff"/></clipPath>
+<g clip-path="url(#r)"><rect width="${lw}" height="20" fill="#555"/><rect x="${lw}" width="${vw}" height="20" fill="${COLORS[grade]}"/><rect width="${w}" height="20" fill="url(#s)"/></g>
+<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+<text x="${lw / 2}" y="15" fill="#010101" fill-opacity=".3">${esc(label)}</text><text x="${lw / 2}" y="14">${esc(label)}</text>
+<text x="${lw + vw / 2}" y="15" fill="#010101" fill-opacity=".3">${value}</text><text x="${lw + vw / 2}" y="14">${value}</text>
+</g>
+</svg>
+`;
 }
 
 // ../core/dist/eras.js
@@ -599,18 +1011,86 @@ function buildCity(model, opts) {
   };
 }
 
+// ../core/dist/compare.js
+function hotspotPaths(city, found) {
+  const h = found.find((f) => f.id === "hotspots");
+  return (h?.matches ?? []).map((i) => city.files[i]?.path ?? "").filter(Boolean);
+}
+function compareCities(base, head) {
+  const sb = fileSignals(base);
+  const sh = fileSignals(head);
+  const before = health(base, sb);
+  const after = health(head, sh);
+  const hb = new Set(hotspotPaths(base, findings(base, sb)));
+  const hh = hotspotPaths(head, findings(head, sh));
+  const hhSet = new Set(hh);
+  const fireBefore = new Set(base.files.filter((f, i) => isCounted(f) && (sb.heatNow[i] ?? 0) >= HOT_NOW).map((f) => f.path));
+  const newFires = head.files.map((f, i) => [f, sh.heatNow[i] ?? 0]).filter(([f, heat]) => isCounted(f) && heat >= HOT_NOW && !fireBefore.has(f.path)).sort((a, b) => b[1] - a[1] || (a[0].path < b[0].path ? -1 : 1)).map(([f]) => f.path);
+  const locBefore = new Map(base.files.filter(isCounted).map((f) => [f.path, f.loc]));
+  const countedNow = head.files.filter(isCounted);
+  const grew = countedNow.map((f) => ({ path: f.path, before: locBefore.get(f.path) ?? 0, after: f.loc })).filter((d) => d.after > d.before).sort((a, b) => b.after - b.before - (a.after - a.before) || (a.path < b.path ? -1 : 1)).slice(0, 5);
+  const nowPaths = new Set(countedNow.map((f) => f.path));
+  return {
+    before,
+    after,
+    delta: after.score - before.score,
+    newHotspots: hh.filter((p) => !hb.has(p)),
+    resolvedHotspots: [...hb].filter((p) => !hhSet.has(p)).sort(),
+    newFires,
+    grew,
+    added: countedNow.filter((f) => !locBefore.has(f.path)).length,
+    removed: [...locBefore.keys()].filter((p) => !nowPaths.has(p)).length
+  };
+}
+var code = (p) => `\`${p.replace(/`/g, "'")}\``;
+var list = (paths, max = 10) => {
+  const lines = paths.slice(0, max).map((p) => `- ${code(p)}`);
+  if (paths.length > max)
+    lines.push(`- \u2026and ${paths.length - max} more`);
+  return lines;
+};
+function renderComparison(c) {
+  const arrow = c.delta > 0 ? "\u25B2" : c.delta < 0 ? "\u25BC" : "\u25AC";
+  const L = [
+    "## Since the baseline",
+    "",
+    `**Health ${c.before.score} \u2192 ${c.after.score}** (${arrow} ${c.delta > 0 ? "+" : ""}${c.delta}, grade ${c.before.grade} \u2192 ${c.after.grade})`,
+    "",
+    "| Signal | Before | Now |",
+    "|---|---:|---:|"
+  ];
+  for (const p of c.after.parts) {
+    const b = c.before.parts.find((x) => x.id === p.id);
+    L.push(`| ${p.label} | ${b ? Math.round(b.score * 100) : "\u2014"} | ${Math.round(p.score * 100)} |`);
+  }
+  L.push("", `${c.added} files added and ${c.removed} removed.`, "");
+  if (c.newHotspots.length)
+    L.push(`### New hotspots (${c.newHotspots.length})`, "", ...list(c.newHotspots), "");
+  if (c.resolvedHotspots.length)
+    L.push(`### Hotspots resolved (${c.resolvedHotspots.length})`, "", ...list(c.resolvedHotspots), "");
+  if (c.newFires.length)
+    L.push(`### Newly on fire (${c.newFires.length})`, "", ...list(c.newFires), "");
+  if (c.grew.length) {
+    L.push("### Grew the most", "", "| File | Lines before | Lines now |", "|---|---:|---:|");
+    for (const g of c.grew)
+      L.push(`| ${code(g.path)} | ${g.before.toLocaleString("en-US")} | ${g.after.toLocaleString("en-US")} |`);
+    L.push("");
+  }
+  return L.join("\n");
+}
+
 // ../core/dist/git.js
 import { spawn } from "node:child_process";
 var GitError = class extends Error {
   code;
-  constructor(code, message) {
+  constructor(code2, message) {
     super(message);
-    this.code = code;
+    this.code = code2;
     this.name = "GitError";
   }
 };
 function git(repo, args, input) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn("git", ["-C", repo, ...args], { stdio: ["pipe", "pipe", "pipe"] });
     const out = [];
     const err = [];
@@ -619,11 +1099,11 @@ function git(repo, args, input) {
     child.on("error", (e) => {
       reject(new GitError(e.code === "ENOENT" ? "GIT_MISSING" : "GIT_FAILED", `could not run git: ${e.message}`));
     });
-    child.on("close", (code) => {
-      if (code === 0)
-        resolve4(Buffer.concat(out));
+    child.on("close", (code2) => {
+      if (code2 === 0)
+        resolve6(Buffer.concat(out));
       else
-        reject(new GitError("GIT_FAILED", Buffer.concat(err).toString("utf8").trim() || `git exited with ${code}`));
+        reject(new GitError("GIT_FAILED", Buffer.concat(err).toString("utf8").trim() || `git exited with ${code2}`));
     });
     child.stdin.on("error", () => {
     });
@@ -796,17 +1276,17 @@ var LogParser = class {
   }
 };
 function streamGit(repo, args, onData, input) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn2("git", ["-C", repo, ...args], { stdio: ["pipe", "pipe", "pipe"] });
     const err = [];
     child.stdout.on("data", onData);
     child.stderr.on("data", (c) => err.push(c));
     child.on("error", (e) => reject(new GitError("GIT_FAILED", `could not run git: ${e.message}`)));
-    child.on("close", (code) => {
-      if (code === 0)
-        resolve4();
+    child.on("close", (code2) => {
+      if (code2 === 0)
+        resolve6();
       else
-        reject(new GitError("GIT_FAILED", Buffer.concat(err).toString("utf8").trim() || `git exited with ${code}`));
+        reject(new GitError("GIT_FAILED", Buffer.concat(err).toString("utf8").trim() || `git exited with ${code2}`));
     });
     child.stdin.on("error", () => {
     });
@@ -924,332 +1404,6 @@ async function ingest(repo, opts = {}) {
     return { path, binary, loc: binary ? 0 : s ? s.lines : null, deleted: false };
   });
   return { repoName: basename(root), head, commits, files, authors: parser.authors };
-}
-
-// ../core/dist/insights.js
-var LENSES = [
-  {
-    id: "risk",
-    label: "Risk",
-    question: "Where will the next problem come from?",
-    low: "small or quiet",
-    high: "large and always changing",
-    explain: "Hotspot score: how large a file is times how often it changes, both as rank percentiles. Most defects and slow reviews concentrate in a few such files."
-  },
-  {
-    id: "bugs",
-    label: "Bugs",
-    question: "Which files keep needing fixes?",
-    low: "no fixes",
-    high: "many fixes",
-    explain: "Fix commits touching the file (messages like fix, bug, hotfix, revert), weighted by how large a share of its changes were fixes."
-  },
-  {
-    id: "silos",
-    label: "Silos",
-    question: "Which busy files depend on one person?",
-    low: "shared knowledge",
-    high: "one author, lots of change",
-    explain: "Files with a single author ranked by how often they change; two-author files count a little. If that person leaves, nobody else knows this code."
-  },
-  {
-    id: "coupling",
-    label: "Coupling",
-    question: "Which files drag others along when they change?",
-    low: "independent",
-    high: "changes with everything",
-    explain: "Co-change centrality (PageRank over files committed together). Edits here ripple into many other files and need wider review."
-  },
-  {
-    id: "age",
-    label: "Age",
-    question: "What has nobody touched in a long time?",
-    low: "changed recently",
-    high: "untouched for longest",
-    explain: "Time since the file last visibly changed, relative to the whole history. Old, large files are either rock-solid or forgotten."
-  }
-];
-var HOT_NOW = 0.25;
-var HOTSPOT_MIN = 0.8;
-var BIG_FILE_LINES = 1e3;
-var clamp01 = (v) => Math.min(1, Math.max(0, v));
-function isAlive(f) {
-  return (f.flags & FILE_DELETED) === 0 && f.loc > 0;
-}
-function fileSignals(city) {
-  const F = city.files.length;
-  const B = city.bucketStart.length;
-  const h = city.history;
-  const lastChange = new Int32Array(F).fill(-1);
-  const heatNow = new Float32Array(F);
-  for (let i = 0; i < F; i++) {
-    let prevLoc = 0;
-    let prevHeat = 0;
-    for (let b = 0; b < B; b++) {
-      const loc = h[(i * B + b) * 2] ?? 0;
-      const heat = h[(i * B + b) * 2 + 1] ?? 0;
-      if (loc !== prevLoc || heat > prevHeat)
-        lastChange[i] = b;
-      prevLoc = loc;
-      prevHeat = heat;
-    }
-    if (B > 0)
-      heatNow[i] = (h[(i * B + B - 1) * 2 + 1] ?? 0) / 65535;
-  }
-  const risk = new Float32Array(F);
-  for (const s of hotspots(city.files))
-    risk[s.index] = s.score;
-  const fixed = city.files.map((f) => isAlive(f) ? f.fixes : 0);
-  const fixPct = rankPercentile(fixed);
-  const bugs = new Float32Array(F);
-  city.files.forEach((f, i) => {
-    if (!isAlive(f) || f.fixes === 0)
-      return;
-    const ratio = f.churn > 0 ? f.fixes / f.churn : 0;
-    bugs[i] = clamp01(0.6 * (fixPct[i] ?? 0) + 0.4 * clamp01(ratio * 2));
-  });
-  const team = city.authors.length >= 2;
-  const churnPct = rankPercentile(city.files.map((f) => isAlive(f) ? f.churn : 0));
-  const silos = new Float32Array(F);
-  if (team) {
-    city.files.forEach((f, i) => {
-      if (!isAlive(f) || f.churn === 0)
-        return;
-      if (f.authors === 1)
-        silos[i] = churnPct[i] ?? 0;
-      else if (f.authors === 2)
-        silos[i] = 0.4 * (churnPct[i] ?? 0);
-    });
-  }
-  const coupling = new Float32Array(F);
-  const age = new Float32Array(F);
-  city.files.forEach((f, i) => {
-    if (!isAlive(f))
-      return;
-    coupling[i] = clamp01(f.centrality);
-    const last = lastChange[i] ?? -1;
-    age[i] = B > 1 && last >= 0 ? (B - 1 - last) / (B - 1) : 0;
-  });
-  return { risk, bugs, silos, coupling, age, lastChange, heatNow };
-}
-var pct = (v) => `${Math.round(v * 100)}%`;
-function gradeFor(score) {
-  return score >= 85 ? "A" : score >= 70 ? "B" : score >= 55 ? "C" : score >= 40 ? "D" : "E";
-}
-function health(city, signals = fileSignals(city)) {
-  const alive = city.files.map((f, i) => [f, i]).filter(([f]) => isAlive(f));
-  const totalChurn = city.files.reduce((s, f) => s + f.churn, 0);
-  const totalFixes = city.files.reduce((s, f) => s + f.fixes, 0);
-  const aliveLoc = alive.reduce((s, [f]) => s + f.loc, 0);
-  const fixShare = totalChurn > 0 ? totalFixes / totalChurn : 0;
-  const parts = [
-    {
-      id: "fixLoad",
-      label: "Fix load",
-      score: clamp01(1 - fixShare / 0.4),
-      detail: `${pct(fixShare)} of file changes were bug fixes`,
-      weight: 0.35
-    }
-  ];
-  if (city.authors.length >= 2) {
-    const soloLoc = alive.filter(([f]) => f.authors === 1).reduce((s, [f]) => s + f.loc, 0);
-    const share = aliveLoc > 0 ? soloLoc / aliveLoc : 0;
-    parts.push({
-      id: "knowledge",
-      label: "Knowledge spread",
-      score: clamp01(1 - share),
-      detail: `${pct(share)} of the code has only one author`,
-      weight: 0.25
-    });
-  }
-  const hot = alive.filter(([, i]) => (signals.heatNow[i] ?? 0) >= HOT_NOW).length;
-  const hotShare = alive.length ? hot / alive.length : 0;
-  parts.push({
-    id: "fireNow",
-    label: "Fires right now",
-    score: clamp01(1 - hotShare / 0.15),
-    detail: `${hot} of ${alive.length} files are hot with recent fixes`,
-    weight: 0.2
-  });
-  const bigLoc = alive.filter(([f]) => f.loc > BIG_FILE_LINES).reduce((s, [f]) => s + f.loc, 0);
-  const bigShare = aliveLoc > 0 ? bigLoc / aliveLoc : 0;
-  parts.push({
-    id: "fileSize",
-    label: "File size",
-    score: clamp01(1 - bigShare / 0.5),
-    detail: `${pct(bigShare)} of the code sits in files over ${BIG_FILE_LINES.toLocaleString("en-US")} lines`,
-    weight: 0.2
-  });
-  const totalWeight = parts.reduce((s, p) => s + p.weight, 0);
-  const score = Math.round(100 * parts.reduce((s, p) => s + p.score * p.weight, 0) / totalWeight);
-  return { score, grade: gradeFor(score), parts };
-}
-var TOP = 5;
-function quantile(sorted, q) {
-  if (sorted.length === 0)
-    return 0;
-  return sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))];
-}
-function findings(city, signals = fileSignals(city)) {
-  const out = [];
-  const files = city.files;
-  const alive = files.map((_, i) => i).filter((i) => isAlive(files[i]));
-  const by = (key) => (a, b) => key(b) - key(a) || a - b;
-  const f = (i) => files[i];
-  const focus = (list, share) => list.slice(0, Math.max(TOP, Math.ceil(alive.length * share)));
-  const hot = focus(alive.filter((i) => (signals.risk[i] ?? 0) >= HOTSPOT_MIN && f(i).churn >= 3).sort(by((i) => signals.risk[i] ?? 0)), 0.02);
-  if (hot.length) {
-    out.push({
-      id: "hotspots",
-      severity: (signals.risk[hot[0]] ?? 0) >= 0.9 ? "high" : "medium",
-      title: `${hot.length} hotspot${hot.length === 1 ? "" : "s"}: large files that never stop changing`,
-      why: "Defects, merge conflicts and slow reviews concentrate in files that are both big and busy.",
-      action: "Start refactoring and testing here: split the largest, and add tests before the next change.",
-      files: hot.slice(0, TOP),
-      matches: hot,
-      lens: "risk"
-    });
-  }
-  const fire = alive.filter((i) => (signals.heatNow[i] ?? 0) >= HOT_NOW).sort(by((i) => signals.heatNow[i] ?? 0));
-  if (fire.length) {
-    out.push({
-      id: "fire",
-      severity: fire.length >= 5 ? "high" : "medium",
-      title: `${fire.length} file${fire.length === 1 ? " is" : "s are"} on fire right now`,
-      why: "These files received bug fixes recently and repeatedly. Fixes that keep coming usually mean the cause is not fixed yet.",
-      action: "Look for the root cause before the next patch: a missing test, an unclear contract or a design limit.",
-      files: fire.slice(0, TOP),
-      matches: fire,
-      lens: "bugs"
-    });
-  }
-  const buggy = focus(alive.filter((i) => f(i).fixes >= 2).sort(by((i) => f(i).fixes * 10 + (signals.bugs[i] ?? 0))), 0.03);
-  if (buggy.length) {
-    out.push({
-      id: "bugs",
-      severity: f(buggy[0]).fixes >= 5 ? "high" : "medium",
-      title: `${buggy.length} bug-prone file${buggy.length === 1 ? "" : "s"}`,
-      why: "Files fixed again and again are where users feel the bugs. A file's past fix rate is one of the best predictors of its future bugs.",
-      action: "Give these files an owner, stronger tests and a review checklist.",
-      files: buggy.slice(0, TOP),
-      matches: buggy,
-      lens: "bugs"
-    });
-  }
-  if (city.authors.length >= 2) {
-    const silo = alive.filter((i) => f(i).authors === 1 && f(i).churn >= 3).sort(by((i) => f(i).churn));
-    if (silo.length) {
-      out.push({
-        id: "silos",
-        severity: silo.length >= 10 ? "high" : "medium",
-        title: `${silo.length} knowledge silo${silo.length === 1 ? "" : "s"}: busy files only one person has touched`,
-        why: "If that person is away or leaves, nobody else understands these files. This is the bus factor, file by file.",
-        action: "Pair on the next change, or rotate reviews so a second person learns each file.",
-        files: silo.slice(0, TOP),
-        matches: silo,
-        lens: "silos"
-      });
-    }
-  } else if (alive.length) {
-    out.push({
-      id: "solo",
-      severity: "low",
-      title: "Single-author repository",
-      why: "Every file has one author, so all knowledge lives with one person.",
-      action: "Fine for a personal project. Before handing it over, document the busiest files first.",
-      files: [],
-      matches: []
-    });
-  }
-  const hubs = alive.filter((i) => f(i).centrality >= 0.6).sort(by((i) => f(i).centrality));
-  if (hubs.length) {
-    out.push({
-      id: "coupling",
-      severity: hubs.length >= 8 ? "medium" : "low",
-      title: `${hubs.length} change magnet${hubs.length === 1 ? "" : "s"}: files that change together with many others`,
-      why: "A change here usually means changes elsewhere too, so estimates slip and reviews grow.",
-      action: "Check whether these are shared configs or real tangles; extract stable interfaces where they are tangles.",
-      files: hubs.slice(0, TOP),
-      matches: hubs,
-      lens: "coupling"
-    });
-  }
-  const sortedLoc = alive.map((i) => f(i).loc).sort((a, b) => a - b);
-  const bigLine = Math.max(300, quantile(sortedLoc, 0.75));
-  const dormant = alive.filter((i) => f(i).loc >= bigLine && (signals.age[i] ?? 0) >= 0.5).sort(by((i) => f(i).loc));
-  if (dormant.length) {
-    out.push({
-      id: "dormant",
-      severity: "low",
-      title: `${dormant.length} dormant giant${dormant.length === 1 ? "" : "s"}: large files untouched for a long time`,
-      why: "Old, large, quiet files are either rock-solid or forgotten. Forgotten ones break the day someone has to change them.",
-      action: "Confirm each still has an owner and tests, or mark it for deletion.",
-      files: dormant.slice(0, TOP),
-      matches: dormant,
-      lens: "age"
-    });
-  }
-  const rank = { high: 0, medium: 1, low: 2 };
-  return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
-}
-var isoDate = (unix) => new Date(unix * 1e3).toISOString().slice(0, 10);
-var md = (s) => s.replace(/([\\`*_[\]|<>])/g, "\\$1");
-var int = (n) => Math.round(n).toLocaleString("en-US");
-function renderReport(city) {
-  const signals = fileSignals(city);
-  const hp = health(city, signals);
-  const found = findings(city, signals);
-  const alive = city.files.filter(isAlive);
-  const deleted = city.files.filter((f) => f.flags & FILE_DELETED).length;
-  const binary = alive.filter((f) => f.flags & FILE_BINARY).length;
-  const B = city.bucketStart.length;
-  const from = B ? isoDate(city.bucketStart[0]) : isoDate(city.generatedAt);
-  const to = isoDate(city.generatedAt);
-  const L = [];
-  L.push(`# ${md(city.repoName)}: codebase report`, "");
-  L.push(`Generated by Git-Cinematic from the history between ${from} and ${to}.`, "");
-  L.push(`## Health: ${hp.score}/100 (grade ${hp.grade})`, "");
-  L.push("| Signal | Score | What it measures |", "|---|---:|---|");
-  for (const p of hp.parts)
-    L.push(`| ${p.label} | ${Math.round(p.score * 100)} | ${md(p.detail)} |`);
-  L.push("", "The score is a heuristic. Use it to compare this repository with itself over time, not with other teams.", "");
-  L.push("## At a glance", "");
-  L.push(`- **${int(alive.length)}** files today, **${int(alive.reduce((s, f) => s + f.loc, 0))}** lines`);
-  if (deleted)
-    L.push(`- **${int(deleted)}** files that existed once and were deleted`);
-  if (binary)
-    L.push(`- **${int(binary)}** binary files (shown, but not counted in lines)`);
-  L.push(`- **${int(city.authors.length)}** author${city.authors.length === 1 ? "" : "s"}`);
-  L.push(`- **${city.eras.length}** era${city.eras.length === 1 ? "" : "s"} in the history`, "");
-  if (city.eras.length) {
-    L.push("## The story so far", "", "| From | Era | Where most of the work went |", "|---|---|---|");
-    for (const e of city.eras) {
-      const start = isoDate(city.bucketStart[e.startBucket] ?? city.generatedAt);
-      L.push(`| ${start} | ${ERA_KIND_NAMES[e.kind]} | ${md(e.title.split(" \xB7 ")[1] ?? "")} |`);
-    }
-    L.push("");
-  }
-  L.push("## Findings", "");
-  if (found.length === 0)
-    L.push("Nothing stands out yet. Come back when there is more history.", "");
-  for (const x of found) {
-    L.push(`### ${x.severity === "high" ? "\u{1F534}" : x.severity === "medium" ? "\u{1F7E0}" : "\u{1F535}"} ${md(x.title)}`, "");
-    L.push(`**Why it matters:** ${x.why}`, "", `**What to do:** ${x.action}`, "");
-    if (x.files.length) {
-      L.push("| File | Lines | Commits | Fixes | Authors |", "|---|---:|---:|---:|---:|");
-      for (const i of x.files) {
-        const f = city.files[i];
-        if (f)
-          L.push(`| \`${f.path.replace(/`/g, "'")}\` | ${int(f.loc)} | ${int(f.churn)} | ${int(f.fixes)} | ${int(f.authors)} |`);
-      }
-      L.push("");
-    }
-  }
-  L.push("## How to read this", "");
-  for (const l of LENSES)
-    L.push(`- **${l.label}:** ${l.explain}`);
-  L.push("", "Commits that touch more than 50 files (reformats, vendor drops, bulk renames) are left out of churn, fixes and coupling.", "The analysis ran locally. It reads file paths, line counts, author display names and commit subjects; no source code or messages are stored.", "");
-  return L.join("\n");
 }
 
 // ../core/dist/metrics.js
@@ -1647,18 +1801,207 @@ usage: ${ANALYZE_USAGE}
   }
 }
 
+// src/badge.ts
+import { mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, relative as relative2, resolve as resolve3 } from "node:path";
+
+// src/city-file.ts
+import { existsSync, readFileSync } from "node:fs";
+import { resolve as resolve2 } from "node:path";
+var DEFAULT_CITY = ".cinematic/city.bin";
+function readCity(arg, io) {
+  const path = resolve2(io.cwd, arg);
+  if (!existsSync(path)) {
+    io.err(`error: no city file at ${arg}; run git-cinematic analyze first
+`);
+    return null;
+  }
+  try {
+    return unpackCity(readFileSync(path));
+  } catch (e) {
+    io.err(`error: ${arg} is not a valid city file (${e instanceof Error ? e.message : String(e)})
+`);
+    return null;
+  }
+}
+
+// src/badge.ts
+var BADGE_USAGE = 'git-cinematic badge   [city=.cinematic/city.bin] [-o .cinematic/health.svg] [--label "code health"]';
+async function badgeCommand(argv, io) {
+  let cityArg;
+  let outArg;
+  let label;
+  try {
+    const p = parseArgs(argv, [{ name: "output", short: "o" }, { name: "label" }]);
+    if (p.positionals.length > 1) throw new UsageError("badge takes at most one city file");
+    cityArg = p.positionals[0] ?? DEFAULT_CITY;
+    outArg = stringOption(p, "output") ?? ".cinematic/health.svg";
+    label = stringOption(p, "label") ?? "code health";
+    if (label.length === 0 || label.length > 40) throw new UsageError("--label must be 1 to 40 characters");
+  } catch (e) {
+    if (e instanceof UsageError) {
+      io.err(`error: ${e.message}
+usage: ${BADGE_USAGE}
+`);
+      return 2;
+    }
+    throw e;
+  }
+  const city = readCity(cityArg, io);
+  if (!city) return 1;
+  const h = health(city);
+  const outPath = resolve3(io.cwd, outArg);
+  mkdirSync2(dirname2(outPath), { recursive: true });
+  writeFileSync2(outPath, renderBadge(h.score, label));
+  const rel = relative2(io.cwd, outPath);
+  io.out(`wrote ${rel && !rel.startsWith("..") ? rel : outPath} (${h.score}/100, grade ${h.grade})
+`);
+  return 0;
+}
+
+// src/check.ts
+import { appendFileSync } from "node:fs";
+var CHECK_USAGE = "git-cinematic check   [city=.cinematic/city.bin] [--min-health 60] [--baseline old.bin] [--max-drop 5] [--max-new-hotspots 0] [--github]";
+function evaluate(city, gate, cmp) {
+  const h = cmp?.after ?? health(city);
+  const rules = [];
+  if (gate.min !== void 0) {
+    rules.push({
+      name: "minimum health",
+      ok: h.score >= gate.min,
+      detail: `health ${h.score} ${h.score >= gate.min ? "\u2265" : "<"} ${gate.min}`
+    });
+  }
+  if (cmp && gate.maxDrop !== void 0) {
+    const drop = -cmp.delta;
+    rules.push({
+      name: "health drop",
+      ok: drop <= gate.maxDrop,
+      detail: `${cmp.before.score} \u2192 ${cmp.after.score} (${cmp.delta >= 0 ? "+" : ""}${cmp.delta}, allowed drop ${gate.maxDrop})`
+    });
+  }
+  if (cmp && gate.maxNewHotspots !== void 0) {
+    const n = cmp.newHotspots.length;
+    rules.push({
+      name: "new hotspots",
+      ok: n <= gate.maxNewHotspots,
+      detail: `${n} new hotspot${n === 1 ? "" : "s"} (allowed ${gate.maxNewHotspots})`
+    });
+  }
+  return rules;
+}
+var escData = (s) => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+var escProp = (s) => escData(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
+function githubAnnotations(city, rules, cmp) {
+  const out = [];
+  for (const r of rules) {
+    if (!r.ok) out.push(`::error title=${escProp(`Code health: ${r.name}`)}::${escData(r.detail)}`);
+  }
+  const hot = cmp ? cmp.newHotspots.map((path) => ({ path, title: "New hotspot" })) : (findings(city).find((f) => f.id === "hotspots")?.files ?? []).map((i) => ({
+    path: city.files[i]?.path ?? "",
+    title: "Hotspot"
+  }));
+  for (const { path, title } of hot.slice(0, 10)) {
+    if (!path) continue;
+    const f = city.files.find((x) => x.path === path);
+    const msg = f ? `${f.loc.toLocaleString("en-US")} lines, ${f.churn} commits, ${f.fixes} fixes. Large and always changing: refactor or add tests before the next change.` : "Large and always changing.";
+    out.push(`::warning file=${escProp(path)},title=${escProp(title)}::${escData(msg)}`);
+  }
+  return out;
+}
+async function checkCommand(argv, io) {
+  let cityArg;
+  let baselineArg;
+  let gate;
+  let github;
+  try {
+    const p = parseArgs(argv, [
+      { name: "min-health" },
+      { name: "baseline" },
+      { name: "max-drop" },
+      { name: "max-new-hotspots" },
+      { name: "github", flag: true }
+    ]);
+    if (p.positionals.length > 1) throw new UsageError("check takes at most one city file");
+    cityArg = p.positionals[0] ?? DEFAULT_CITY;
+    baselineArg = stringOption(p, "baseline");
+    gate = {
+      min: intOption(p, "min-health", 0),
+      maxDrop: intOption(p, "max-drop", 0),
+      maxNewHotspots: intOption(p, "max-new-hotspots", 0)
+    };
+    if (gate.min !== void 0 && gate.min > 100) throw new UsageError("--min-health must be 0 to 100");
+    if (!baselineArg && (gate.maxDrop !== void 0 || gate.maxNewHotspots !== void 0)) {
+      throw new UsageError("--max-drop and --max-new-hotspots need --baseline");
+    }
+    github = p.options.has("github") || io.env?.GITHUB_ACTIONS === "true";
+  } catch (e) {
+    if (e instanceof UsageError) {
+      io.err(`error: ${e.message}
+usage: ${CHECK_USAGE}
+`);
+      return 2;
+    }
+    throw e;
+  }
+  const city = readCity(cityArg, io);
+  if (!city) return 1;
+  let cmp;
+  if (baselineArg) {
+    const base = readCity(baselineArg, io);
+    if (!base) return 1;
+    cmp = compareCities(base, city);
+  }
+  const h = cmp?.after ?? health(city);
+  const rules = evaluate(city, gate, cmp);
+  const failed = rules.filter((r) => !r.ok);
+  const lines = [`git-cinematic check \xB7 ${city.repoName}`, "", `  health   ${h.score}/100 (grade ${h.grade})`];
+  if (cmp) lines.push(`  baseline ${cmp.before.score}/100 (grade ${cmp.before.grade})`);
+  if (rules.length) {
+    lines.push("");
+    for (const r of rules) lines.push(`  ${r.ok ? "pass" : "FAIL"}  ${r.name.padEnd(15)} ${r.detail}`);
+  }
+  lines.push("", failed.length ? `  \u2716 ${failed.length} of ${rules.length} checks failed` : "  \u2714 all checks passed", "");
+  io.out(lines.join("\n"));
+  if (github) {
+    for (const a of githubAnnotations(city, rules, cmp)) io.out(`${a}
+`);
+    const output = io.env?.GITHUB_OUTPUT;
+    if (output) appendFileSync(output, `health=${h.score}
+grade=${h.grade}
+passed=${failed.length === 0}
+`);
+    const summary = io.env?.GITHUB_STEP_SUMMARY;
+    if (summary) {
+      const gateTable = rules.length ? [
+        "| Check | Result | Detail |",
+        "|---|---|---|",
+        ...rules.map((r) => `| ${r.name} | ${r.ok ? "\u2705 pass" : "\u274C fail"} | ${r.detail} |`),
+        ""
+      ].join("\n") : "";
+      const since = cmp ? renderComparison(cmp) : void 0;
+      appendFileSync(summary, `${gateTable}
+${renderReport(city, { since })}
+`);
+    }
+  }
+  return failed.length ? 1 : 0;
+}
+
 // src/report.ts
-import { existsSync, mkdirSync as mkdirSync2, readFileSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, relative as relative2, resolve as resolve2 } from "node:path";
-var REPORT_USAGE = "git-cinematic report  [city=.cinematic/city.bin] [-o report.md]";
+import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname3, relative as relative3, resolve as resolve4 } from "node:path";
+var REPORT_USAGE = "git-cinematic report  [city=.cinematic/city.bin] [-o report.md] [--baseline old.bin]";
 async function reportCommand(argv, io) {
   let cityArg;
   let outArg;
+  let baselineArg;
   try {
-    const p = parseArgs(argv, [{ name: "output", short: "o" }]);
+    const p = parseArgs(argv, [{ name: "output", short: "o" }, { name: "baseline" }]);
     if (p.positionals.length > 1) throw new UsageError("report takes at most one city file");
-    cityArg = p.positionals[0] ?? ".cinematic/city.bin";
+    cityArg = p.positionals[0] ?? DEFAULT_CITY;
     outArg = stringOption(p, "output");
+    baselineArg = stringOption(p, "baseline");
   } catch (e) {
     if (e instanceof UsageError) {
       io.err(`error: ${e.message}
@@ -1668,31 +2011,23 @@ usage: ${REPORT_USAGE}
     }
     throw e;
   }
-  const cityPath = resolve2(io.cwd, cityArg);
-  if (!existsSync(cityPath)) {
-    io.err(`error: no city file at ${cityArg}; run git-cinematic analyze first
-`);
-    return 1;
+  const city = readCity(cityArg, io);
+  if (!city) return 1;
+  let since;
+  if (baselineArg) {
+    const base = readCity(baselineArg, io);
+    if (!base) return 1;
+    since = renderComparison(compareCities(base, city));
   }
-  let text;
-  try {
-    text = renderReport(unpackCity(readFileSync(cityPath)));
-  } catch (e) {
-    if (e instanceof CityFormatError || e instanceof Error && /incorrect header|invalid/i.test(e.message)) {
-      io.err(`error: ${cityArg} is not a valid city file (${e.message})
-`);
-      return 1;
-    }
-    throw e;
-  }
+  const text = renderReport(city, { since });
   if (!outArg) {
     io.out(text);
     return 0;
   }
-  const outPath = resolve2(io.cwd, outArg);
-  mkdirSync2(dirname2(outPath), { recursive: true });
-  writeFileSync2(outPath, text);
-  const rel = relative2(io.cwd, outPath);
+  const outPath = resolve4(io.cwd, outArg);
+  mkdirSync3(dirname3(outPath), { recursive: true });
+  writeFileSync3(outPath, text);
+  const rel = relative3(io.cwd, outPath);
   io.out(`wrote ${rel && !rel.startsWith("..") ? rel : outPath}
 `);
   return 0;
@@ -1702,11 +2037,11 @@ usage: ${REPORT_USAGE}
 import { spawn as spawn3 } from "node:child_process";
 import { createReadStream, existsSync as existsSync2, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve as resolve3, sep } from "node:path";
+import { extname, join, normalize, resolve as resolve5, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 var VIEW_USAGE = "git-cinematic view    [city=.cinematic/city.bin] [--port 4173] [--no-open]";
 var CITY_ROUTE = "/local/city.bin";
-var DEFAULT_CITY = ".cinematic/city.bin";
+var DEFAULT_CITY2 = ".cinematic/city.bin";
 var MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -1744,7 +2079,7 @@ function serveFile(req, res, file, cache) {
   createReadStream(file).pipe(res);
 }
 function createViewServer(opts) {
-  const root = resolve3(opts.viewerDir);
+  const root = resolve5(opts.viewerDir);
   return createServer((req, res) => {
     if (req.method !== "GET" && req.method !== "HEAD") {
       send(res, 405, "method not allowed");
@@ -1834,11 +2169,11 @@ usage: ${VIEW_USAGE}
     }
     throw e;
   }
-  let cityPath = resolve3(io.cwd, cityArg || DEFAULT_CITY);
+  let cityPath = resolve5(io.cwd, cityArg || DEFAULT_CITY2);
   if (!cityArg && !existsSync2(cityPath)) {
     try {
       const { root } = await resolveRepo(io.cwd);
-      cityPath = resolve3(root, DEFAULT_CITY);
+      cityPath = resolve5(root, DEFAULT_CITY2);
     } catch {
     }
   }
@@ -1881,6 +2216,8 @@ usage:
   ${ANALYZE_USAGE}
   ${VIEW_USAGE}
   ${REPORT_USAGE}
+  ${CHECK_USAGE}
+  ${BADGE_USAGE}
   git-cinematic --version | --help
 
 Nothing is uploaded: the city file holds paths, counts and scores, never file contents.
@@ -1894,6 +2231,10 @@ async function main(argv, io) {
       return viewCommand(rest, io);
     case "report":
       return reportCommand(rest, io);
+    case "check":
+      return checkCommand(rest, io);
+    case "badge":
+      return badgeCommand(rest, io);
     case "--version":
     case "-v":
       io.out(`${PACKAGE_VERSION}
@@ -1917,10 +2258,11 @@ ${HELP}`);
 main(process.argv.slice(2), {
   out: (s) => process.stdout.write(s),
   err: (s) => process.stderr.write(s),
-  cwd: process.cwd()
+  cwd: process.cwd(),
+  env: process.env
 }).then(
-  (code) => {
-    process.exitCode = code;
+  (code2) => {
+    process.exitCode = code2;
   },
   (e) => {
     process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}
