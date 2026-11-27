@@ -26,7 +26,8 @@
     "hotspots"
   ],
   "scripts": {
-    "build": "tsc -b && node build.mjs"
+    "build": "tsc -b && node build.mjs",
+    "prepack": "node prepack-check.mjs"
   },
   "devDependencies": {
     "@git-cinematic/core": "^0.1.0"

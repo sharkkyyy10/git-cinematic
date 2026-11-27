@@ -1,11 +1,13 @@
 import { PACKAGE_VERSION } from "@git-cinematic/core";
 import { ANALYZE_USAGE, analyzeCommand, type Io } from "./analyze.js";
+import { VIEW_USAGE, viewCommand } from "./view.js";
 
 const HELP = `git-cinematic ${PACKAGE_VERSION}
 Fly through your git history as a living 3D city.
 
 usage:
   ${ANALYZE_USAGE}
+  ${VIEW_USAGE}
   git-cinematic --version | --help
 
 Nothing is uploaded: the city file holds paths, counts and scores, never file contents.
@@ -16,6 +18,8 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
   switch (cmd) {
     case "analyze":
       return analyzeCommand(rest, io);
+    case "view":
+      return viewCommand(rest, io);
     case "--version":
     case "-v":
       io.out(`${PACKAGE_VERSION}\n`);
