@@ -24,6 +24,8 @@ export interface Io {
   out: (s: string) => void;
   err: (s: string) => void;
   cwd: string;
+  /** Environment variables; check reads GITHUB_ACTIONS and GITHUB_STEP_SUMMARY. */
+  env?: Record<string, string | undefined>;
 }
 
 export async function analyzeCommand(argv: readonly string[], io: Io): Promise<number> {

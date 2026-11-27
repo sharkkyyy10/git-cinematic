@@ -1,20 +1,23 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
-import { CityFormatError, renderReport, unpackCity } from "@git-cinematic/core";
+import { compareCities, renderComparison, renderReport } from "@git-cinematic/core";
 import type { Io } from "./analyze.js";
 import { parseArgs, stringOption, UsageError } from "./args.js";
+import { DEFAULT_CITY, readCity } from "./city-file.js";
 
-export const REPORT_USAGE = "git-cinematic report  [city=.cinematic/city.bin] [-o report.md]";
+export const REPORT_USAGE = "git-cinematic report  [city=.cinematic/city.bin] [-o report.md] [--baseline old.bin]";
 
 /** Write the Markdown codebase report for a city file, to stdout or to a file. */
 export async function reportCommand(argv: readonly string[], io: Io): Promise<number> {
   let cityArg: string;
   let outArg: string | undefined;
+  let baselineArg: string | undefined;
   try {
-    const p = parseArgs(argv, [{ name: "output", short: "o" }]);
+    const p = parseArgs(argv, [{ name: "output", short: "o" }, { name: "baseline" }]);
     if (p.positionals.length > 1) throw new UsageError("report takes at most one city file");
-    cityArg = p.positionals[0] ?? ".cinematic/city.bin";
+    cityArg = p.positionals[0] ?? DEFAULT_CITY;
     outArg = stringOption(p, "output");
+    baselineArg = stringOption(p, "baseline");
   } catch (e) {
     if (e instanceof UsageError) {
       io.err(`error: ${e.message}\nusage: ${REPORT_USAGE}\n`);
@@ -22,21 +25,15 @@ export async function reportCommand(argv: readonly string[], io: Io): Promise<nu
     }
     throw e;
   }
-  const cityPath = resolve(io.cwd, cityArg);
-  if (!existsSync(cityPath)) {
-    io.err(`error: no city file at ${cityArg}; run git-cinematic analyze first\n`);
-    return 1;
+  const city = readCity(cityArg, io);
+  if (!city) return 1;
+  let since: string | undefined;
+  if (baselineArg) {
+    const base = readCity(baselineArg, io);
+    if (!base) return 1;
+    since = renderComparison(compareCities(base, city));
   }
-  let text: string;
-  try {
-    text = renderReport(unpackCity(readFileSync(cityPath)));
-  } catch (e) {
-    if (e instanceof CityFormatError || (e instanceof Error && /incorrect header|invalid/i.test(e.message))) {
-      io.err(`error: ${cityArg} is not a valid city file (${e.message})\n`);
-      return 1;
-    }
-    throw e;
-  }
+  const text = renderReport(city, { since });
   if (!outArg) {
     io.out(text);
     return 0;

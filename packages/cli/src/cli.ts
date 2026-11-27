@@ -1,5 +1,7 @@
 import { PACKAGE_VERSION } from "@git-cinematic/core";
 import { ANALYZE_USAGE, analyzeCommand, type Io } from "./analyze.js";
+import { BADGE_USAGE, badgeCommand } from "./badge.js";
+import { CHECK_USAGE, checkCommand } from "./check.js";
 import { REPORT_USAGE, reportCommand } from "./report.js";
 import { VIEW_USAGE, viewCommand } from "./view.js";
 
@@ -10,6 +12,8 @@ usage:
   ${ANALYZE_USAGE}
   ${VIEW_USAGE}
   ${REPORT_USAGE}
+  ${CHECK_USAGE}
+  ${BADGE_USAGE}
   git-cinematic --version | --help
 
 Nothing is uploaded: the city file holds paths, counts and scores, never file contents.
@@ -24,6 +28,10 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
       return viewCommand(rest, io);
     case "report":
       return reportCommand(rest, io);
+    case "check":
+      return checkCommand(rest, io);
+    case "badge":
+      return badgeCommand(rest, io);
     case "--version":
     case "-v":
       io.out(`${PACKAGE_VERSION}\n`);

@@ -95,3 +95,82 @@ describe("git-cinematic report", () => {
     expect((await run(["report", "--nope"])).code).toBe(2);
   });
 });
+
+describe("git-cinematic check, badge and report --baseline", () => {
+  const head = join(tmp, "head.bin");
+  const base = join(tmp, "base.bin");
+  const ready = (async () => {
+    await run(["analyze", "-o", head]);
+    await run(["analyze", "--max-commits", "8", "-o", base]);
+  })();
+
+  it("passes and fails on the minimum health", async () => {
+    await ready;
+    const ok = await run(["check", head, "--min-health", "0"]);
+    expect(ok.code).toBe(0);
+    expect(ok.out).toContain("all checks passed");
+    const bad = await run(["check", head, "--min-health", "100"]);
+    expect(bad.code).toBe(1);
+    expect(bad.out).toMatch(/FAIL\s+minimum health/);
+  });
+
+  it("compares with a baseline and gates on the drop and on new hotspots", async () => {
+    await ready;
+    const r = await run(["check", head, "--baseline", base, "--max-drop", "100", "--max-new-hotspots", "1000"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/baseline\s+\d+\/100/);
+    expect(r.out).toMatch(/pass\s+health drop/);
+    expect(r.out).toMatch(/pass\s+new hotspots/);
+  });
+
+  it("writes GitHub annotations and appends the job summary", async () => {
+    await ready;
+    const summary = join(tmp, "summary.md");
+    let out = "";
+    const code = await main(["check", head, "--min-health", "100"], {
+      out: (s) => (out += s),
+      err: () => {},
+      cwd: repoRoot,
+      env: { GITHUB_ACTIONS: "true", GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: join(tmp, "output.txt") },
+    });
+    expect(readFileSync(join(tmp, "output.txt"), "utf8")).toMatch(/^health=\d+\ngrade=[A-E]\npassed=false\n$/);
+    expect(code).toBe(1);
+    expect(out).toMatch(/^::error title=Code health%3A minimum health::health \d+ < 100$/m);
+    const text = readFileSync(summary, "utf8");
+    expect(text).toContain("| minimum health | ❌ fail |");
+    expect(text).toMatch(/## Health: \d+\/100/);
+  });
+
+  it("refuses baseline rules without a baseline and bad numbers", async () => {
+    expect((await run(["check", head, "--max-drop", "3"])).code).toBe(2);
+    expect((await run(["check", head, "--min-health", "101"])).code).toBe(2);
+    expect((await run(["check", join(tmp, "nope.bin")])).code).toBe(1);
+  });
+
+  it("adds a since-the-baseline section to the report", async () => {
+    await ready;
+    const r = await run(["report", head, "--baseline", base]);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/## Since the baseline\n\n\*\*Health \d+ → \d+\*\*/);
+  });
+
+  it("writes an SVG badge", async () => {
+    await ready;
+    const svg = join(tmp, "badge/health.svg");
+    const r = await run(["badge", head, "-o", svg, "--label", "health"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/wrote .*health\.svg \(\d+\/100, grade [A-E]\)/);
+    expect(readFileSync(svg, "utf8")).toContain('aria-label="health: ');
+    expect((await run(["badge", head, "--label", ""])).code).toBe(2);
+  });
+});
+
+describe("github annotations", () => {
+  it("escapes workflow-command data and properties", async () => {
+    const { githubAnnotations } = await import("../src/check.js");
+    const city = unpackCity(readFileSync(join(tmp, "head.bin")));
+    const lines = githubAnnotations(city, [{ name: "a,b:c", ok: false, detail: "50%\nnext" }]);
+    expect(lines[0]).toBe("::error title=Code health%3A a%2Cb%3Ac::50%25%0Anext");
+    for (const l of lines.slice(1)) expect(l).toMatch(/^::warning file=[^:]+,title=Hotspot::\d/);
+  });
+});
