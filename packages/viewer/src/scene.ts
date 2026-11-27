@@ -3,12 +3,9 @@ import {
   Color,
   DirectionalLight,
   FogExp2,
-  GridHelper,
   HemisphereLight,
-  Mesh,
-  MeshLambertMaterial,
+  MathUtils,
   PerspectiveCamera,
-  PlaneGeometry,
   Scene,
   Vector2,
   type Vector3,
@@ -18,10 +15,14 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { createWorld, type World } from "./world.js";
+import { GradeShader, pointScale } from "./worldShaders.js";
 
 export const CITY_EXTENT = 1000;
-export const BACKGROUND = new Color(0x04060c);
+/** Night haze at the horizon; the fog and the bottom of the sky share it. */
+export const BACKGROUND = new Color(0x1b1830);
 export const FOG_DENSITY = 0.00042;
 
 /** Bloom at half the canvas resolution, per the performance budget. */
@@ -38,6 +39,8 @@ export class Stage {
   readonly controls: OrbitControls;
   readonly composer: EffectComposer;
   readonly bloom: HalfResBloomPass;
+  readonly world: World;
+  private readonly grade: ShaderPass;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     let renderer: WebGLRenderer;
@@ -59,16 +62,8 @@ export class Stage {
     sun.position.set(400, 800, 300);
     this.scene.add(sun);
 
-    const ground = new Mesh(new PlaneGeometry(12000, 12000), new MeshLambertMaterial({ color: 0x070b14 }));
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.7;
-    this.scene.add(ground);
-    const grid = new GridHelper(4000, 160, 0x1a2848, 0x0d1528);
-    grid.position.y = -0.65;
-    const gridMat = grid.material as { transparent: boolean; opacity: number };
-    gridMat.transparent = true;
-    gridMat.opacity = 0.6;
-    this.scene.add(grid);
+    this.world = createWorld(BACKGROUND, FOG_DENSITY);
+    this.scene.add(this.world.group);
 
     this.camera = new PerspectiveCamera(45, 1, 1, 20000);
     this.controls = new OrbitControls(this.camera, canvas);
@@ -82,9 +77,11 @@ export class Stage {
 
     this.composer = new EffectComposer(renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new HalfResBloomPass(new Vector2(256, 256), 0.7, 0.4, 0.55);
+    this.bloom = new HalfResBloomPass(new Vector2(256, 256), 0.72, 0.45, 0.55);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
+    this.grade = new ShaderPass(GradeShader);
+    this.composer.addPass(this.grade);
     this.resize();
   }
 
@@ -104,6 +101,14 @@ export class Stage {
     this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    const bufferHeight = h * this.renderer.getPixelRatio();
+    pointScale.value = bufferHeight / (2 * Math.tan(MathUtils.degToRad(this.camera.fov) / 2));
+  }
+
+  /** Seconds of animation time for the sky, the outskirts and the film grain. */
+  setClock(seconds: number): void {
+    this.world.uniforms.uClock.value = seconds;
+    (this.grade.uniforms.uClock as { value: number }).value = seconds;
   }
 
   /** Keep the orbit target above ground and inside the city's neighbourhood. */
@@ -115,6 +120,7 @@ export class Stage {
   }
 
   render(): void {
+    this.world.sky.position.copy(this.camera.position);
     this.composer.render();
   }
 

@@ -6,10 +6,12 @@ export interface TestHooks {
   ready: boolean;
   freeze(): void;
   setTime(t: number): void;
-  /** Fraction of pixels that differ from the background after rendering one frame. */
+  /** Fraction of pixels that change when the city is drawn, compared with the empty world. */
   coverage(): number;
   /** A cheap fingerprint of the rendered frame. */
   fingerprint(): number;
+  /** Place the camera exactly (stops any camera move or tour). */
+  pose(position: [number, number, number], target: [number, number, number]): void;
   /** Viewport point on a visible building, with its index, or null. */
   buildingPoint(): { x: number; y: number; index: number } | null;
 }
@@ -29,21 +31,35 @@ export function installTestHooks(app: App): TestHooks {
     ready: false,
     freeze() {
       app.frozen = true;
+      app.finishMove();
     },
     setTime(t) {
       app.timeline?.pause();
       app.timeline?.setTime(t);
     },
     coverage() {
+      const group = app.view?.group;
+      if (!group) return 0;
+      group.visible = false;
+      const empty = readFrame(app);
+      group.visible = true;
       const px = readFrame(app);
       let differ = 0;
       const n = px.length / 4;
       for (let i = 0; i < px.length; i += 4) {
         const d =
-          Math.abs((px[i] as number) - 4) + Math.abs((px[i + 1] as number) - 6) + Math.abs((px[i + 2] as number) - 12);
+          Math.abs((px[i] as number) - (empty[i] as number)) +
+          Math.abs((px[i + 1] as number) - (empty[i + 1] as number)) +
+          Math.abs((px[i + 2] as number) - (empty[i + 2] as number));
         if (d > 18) differ++;
       }
       return differ / n;
+    },
+    pose(position, target) {
+      app.cancelMove();
+      app.stage.camera.position.set(...position);
+      app.stage.controls.target.set(...target);
+      app.renderNow();
     },
     fingerprint() {
       const px = readFrame(app);
@@ -64,6 +80,7 @@ export function installTestHooks(app: App): TestHooks {
         const x = p.x - rect.left;
         const y = p.y - rect.top;
         if (x < 40 || y < 80 || x > rect.width - 40 || y > rect.height - 120) continue;
+        if (document.elementFromPoint(p.x, p.y) !== app.shell.canvas) continue; // covered by the HUD
         if (app.pickAt(x, y) === index) return { x: p.x, y: p.y, index };
       }
       return null;

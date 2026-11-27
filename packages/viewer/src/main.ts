@@ -1,6 +1,7 @@
 import "./style.css";
 import { App } from "./app.js";
 import { installCinematic } from "./cinematic.js";
+import { installHud } from "./hud.js";
 import { LoadError, loadCity, resolveSource } from "./load.js";
 import { Stage } from "./scene.js";
 import { installTestHooks } from "./testing.js";
@@ -31,6 +32,7 @@ async function boot(): Promise<void> {
   }
   const app = new App(shell, stage, source);
   installCinematic(app);
+  installHud(app);
   const hooks = installTestHooks(app);
   shell.loading.textContent = `Loading ${source.label}…`;
   try {

@@ -3,7 +3,7 @@
 
 export const HISTORY_WIDTH = 2048;
 
-const common = /* glsl */ `
+export const common = /* glsl */ `
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -58,6 +58,7 @@ out float vCentrality;
 out float vHeight;
 out float vSelect;
 out float vSeed;
+out vec2 vFoot;
 
 uvec2 historyAt(int index) {
   return texelFetch(uHistory, ivec2(index % ${HISTORY_WIDTH}, index / ${HISTORY_WIDTH}), 0).rg;
@@ -86,6 +87,7 @@ void main() {
   vCentrality = aStatic.x;
   vHeight = h;
   vSeed = aFile;
+  vFoot = aFootprint.zw;
   vSelect = abs(aFile - uSelected) < 0.5 ? 1.0 : (abs(aFile - uHovered) < 0.5 ? 0.5 : 0.0);
   gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
 }
@@ -109,6 +111,7 @@ in float vCentrality;
 in float vHeight;
 in float vSelect;
 in float vSeed;
+in vec2 vFoot;
 
 ${common}
 
@@ -137,18 +140,51 @@ void main() {
   vec3 sky = mix(vec3(0.0005, 0.0008, 0.0016), vec3(0.004, 0.007, 0.015), up * 0.5 + 0.5);
   vec3 color = base * (0.4 + 1.2 * diffuse) + sky;
 
-  // Procedural window grid on the walls; more lit windows on central files.
+  // Procedural facade: window grid with pilasters, lit windows that come and go, and more
+  // (and brighter) lit windows on central files.
   if (abs(up) < 0.5) {
     float u = abs(N.x) > 0.5 ? vLocal.z : vLocal.x;
+    float faceW = abs(N.x) > 0.5 ? vFoot.y : vFoot.x;
     vec2 cell = vec2(u / 2.2, vLocal.y / 3.0);
     vec2 fc = fract(cell);
     vec2 id = floor(cell);
-    float frame = step(0.28, fc.x) * step(fc.x, 0.72) * step(0.3, fc.y) * step(fc.y, 0.78);
+    float frame = step(0.26, fc.x) * step(fc.x, 0.74) * step(0.28, fc.y) * step(fc.y, 0.8);
     float notGround = step(1.0, id.y) * step(vLocal.y, vHeight - 1.5);
-    float lit = step(hash12(id + vec2(vSeed * 1.37, vSeed * 0.71)), 0.02 + 0.55 * vCentrality * vCentrality);
-    float glow = 0.08 + 0.5 * vCentrality;
-    color += frame * notGround * lit * glow * vec3(1.0, 0.62, 0.25) * 0.6;
+    float r = hash12(id + vec2(vSeed * 1.37, vSeed * 0.71));
+    float era = floor(uClock * 0.05 + r * 7.0); // offices empty, flats light up, slowly
+    float chance = 0.07 + 0.6 * vCentrality * vCentrality;
+    float lit = step(hash12(id * 1.31 + vec2(era, vSeed)), chance);
+    float glow = 0.12 + 0.55 * vCentrality;
+    vec3 warm = vec3(1.0, 0.62, 0.25);
+    vec3 cool = vec3(0.7, 0.82, 1.0);
+    vec3 screen = vec3(0.35, 0.55, 1.0) * (0.75 + 0.25 * sin(uClock * 3.0 + r * 40.0) * uFlicker);
+    vec3 tint = r < 0.62 ? warm : (r < 0.9 ? cool : screen);
+    color += frame * notGround * lit * glow * tint * 0.6;
     color += frame * notGround * vec3(0.002, 0.003, 0.006);
+    // Pilasters: darker vertical bands between window columns.
+    color *= 0.85 + 0.15 * smoothstep(0.04, 0.18, min(fc.x, 1.0 - fc.x));
+
+    // Neon shopfronts on the ground floor of wider buildings.
+    float hue = hash12(vec2(vSeed, 2.3));
+    vec3 neonA = mix(vec3(1.0, 0.1, 0.55), vec3(0.0, 0.85, 1.0), step(0.5, hue));
+    vec3 neon = mix(neonA, vec3(1.0, 0.55, 0.05), step(0.82, hue));
+    float shop = step(5.0, faceW) * step(12.0, vHeight) * step(vLocal.y, 2.6) * step(0.4, vLocal.y) * step(0.35, hash12(vec2(vSeed, 9.1)));
+    float signBand = step(2.05, vLocal.y) * step(vLocal.y, 2.45);
+    color += shop * (signBand * neon * 1.6 + (1.0 - signBand) * neon * 0.05);
+
+    // A vertical neon strip down one corner of some towers.
+    float strip = step(hash12(vec2(vSeed, 5.7)), 0.16) * step(40.0, vHeight);
+    float edge = abs(u - faceW * 0.5 + 0.45);
+    float buzz = uFlicker > 0.5 ? step(0.04, hash12(vec2(floor(uClock * 12.0), vSeed))) : 1.0;
+    color += strip * smoothstep(0.35, 0.0, edge) * step(vHeight * 0.35, vLocal.y) * neon * 1.8 * buzz;
+  } else if (up > 0.5 && vHeight > 0.0) {
+    // Roof: a thin lit edge on tall buildings so the skyline reads from above.
+    vec2 q = abs(vLocal.xz) / max(vFoot * 0.5, vec2(0.01));
+    float rim = smoothstep(0.9, 0.98, max(q.x, q.y)) * step(55.0, vHeight);
+    color += rim * vec3(0.35, 0.55, 1.0) * 0.35;
+    // Rooftop units.
+    vec2 cellR = floor(vLocal.xz / 3.0 + vSeed);
+    color += step(0.86, hash12(cellR)) * vec3(0.01, 0.012, 0.018);
   }
 
   // Heat: inferno emissive, flickering and blooming when the building is on fire.
@@ -157,7 +193,7 @@ void main() {
     vec3 fire = inferno(0.12 + 0.56 * vHeat) * vHeat * rise;
     if (vHeat > 0.6) {
       float flick = uFlicker > 0.5 ? fbm(vec3(vWorld.xz * 0.09, uClock * 1.6 - vWorld.y * 0.05)) : 0.5;
-      fire *= 0.6 + 1.6 * flick * flick;
+      fire *= 0.5 + 1.15 * flick * flick;
     } else {
       fire *= 0.45;
     }

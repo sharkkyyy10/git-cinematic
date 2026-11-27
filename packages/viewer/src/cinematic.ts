@@ -55,6 +55,7 @@ export function installCinematic(app: App): void {
     if (!recorder && !app.reducedMotion) void tour.start();
   });
   s.canvas.addEventListener("pointerdown", () => tour.cancel());
+  app.flyListeners.push(() => tour.cancel());
   s.canvas.addEventListener("wheel", () => tour.cancel(), { passive: true });
 
   // ---- search ----

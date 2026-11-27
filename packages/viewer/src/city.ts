@@ -1,16 +1,12 @@
 import { type City, FILE_DELETED } from "@git-cinematic/core/format";
 import {
   BoxGeometry,
-  BufferGeometry,
   Color,
   DataTexture,
-  Float32BufferAttribute,
   GLSL3,
   Group,
   InstancedBufferAttribute,
   InstancedMesh,
-  LineBasicMaterial,
-  LineSegments,
   Matrix4,
   MeshLambertMaterial,
   NearestFilter,
@@ -19,6 +15,7 @@ import {
   UnsignedShortType,
 } from "three";
 import { buildingFragment, buildingVertex, HISTORY_WIDTH } from "./shaders.js";
+import { buildStreets, disposeTree } from "./streets.js";
 
 export const PLATE_HEIGHT = 0.6;
 
@@ -93,7 +90,17 @@ export class CityView {
     this.group.add(this.buildings);
     this.disposables.push(box, this.material, this.texture);
     this.addPlates();
+
+    const last = B - 1;
+    const finalHeights = new Float32Array(F);
+    for (let i = 0; i < F; i++) finalHeights[i] = heightForLoc(city.history[(i * B + last) * 2] ?? 0);
+    const u = this.material.uniforms as unknown as Parameters<typeof buildStreets>[1];
+    this.streets = buildStreets(city, u, finalHeights);
+    this.group.add(this.streets);
   }
+
+  /** Roads, traffic, lamps, beacons and embers. */
+  readonly streets: Group;
 
   private addPlates(): void {
     const dirs = this.city.dirs;
@@ -104,53 +111,19 @@ export class CityView {
     const plates = new InstancedMesh(geo, mat, dirs.length);
     const m = new Matrix4();
     const c = new Color();
-    const outline: number[] = [];
     dirs.forEach((d, i) => {
       const y = (d.depth - 1) * PLATE_HEIGHT * 0.5;
       m.makeScale(d.w, PLATE_HEIGHT, d.d).setPosition(d.x, y - PLATE_HEIGHT * 0.5, d.z);
       plates.setMatrixAt(i, m);
-      c.setHSL(0.6, 0.35, 0.035 + Math.min(d.depth, 5) * 0.012);
+      // Asphalt for the districts, lighter pavement and plazas for the blocks inside them.
+      if (d.depth === 1) c.setHSL(0.62, 0.18, 0.028);
+      else c.setHSL(0.6, 0.14, 0.045 + Math.min(d.depth, 5) * 0.012);
       plates.setColorAt(i, c);
-      const top = y + PLATE_HEIGHT * 0.5 + 0.02;
-      const x0 = d.x - d.w / 2;
-      const x1 = d.x + d.w / 2;
-      const z0 = d.z - d.d / 2;
-      const z1 = d.z + d.d / 2;
-      outline.push(
-        x0,
-        top,
-        z0,
-        x1,
-        top,
-        z0,
-        x1,
-        top,
-        z0,
-        x1,
-        top,
-        z1,
-        x1,
-        top,
-        z1,
-        x0,
-        top,
-        z1,
-        x0,
-        top,
-        z1,
-        x0,
-        top,
-        z0,
-      );
     });
     plates.instanceMatrix.needsUpdate = true;
     if (plates.instanceColor) plates.instanceColor.needsUpdate = true;
-    const lineGeo = new BufferGeometry();
-    lineGeo.setAttribute("position", new Float32BufferAttribute(outline, 3));
-    const lineMat = new LineBasicMaterial({ color: 0x2a3f66, transparent: true, opacity: 0.55 });
-    const lines = new LineSegments(lineGeo, lineMat);
-    this.group.add(plates, lines);
-    this.disposables.push(geo, mat, lineGeo, lineMat);
+    this.group.add(plates);
+    this.disposables.push(geo, mat);
   }
 
   get time(): number {
@@ -218,6 +191,7 @@ export class CityView {
   }
 
   dispose(): void {
+    disposeTree(this.streets);
     for (const d of this.disposables) d.dispose();
     this.group.removeFromParent();
   }

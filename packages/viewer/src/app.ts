@@ -7,6 +7,8 @@ import { BACKGROUND, FOG_DENSITY, type Stage } from "./scene.js";
 import { Timeline } from "./timeline.js";
 import { el, fmtInt, type Shell, setStats, showError } from "./ui.js";
 
+const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e"]);
+
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 interface CameraMove {
@@ -39,6 +41,11 @@ export class App {
   private last = performance.now();
   private clock = 0;
   private readonly cityListeners: CityListener[] = [];
+  /** Keys held for free-roam flight (WASD to move, Q/E to turn, Shift to go faster). */
+  private readonly held = new Set<string>();
+  private boost = false;
+  /** Called when the user starts flying with the keyboard. */
+  readonly flyListeners: (() => void)[] = [];
   readonly frameListeners: ((dt: number, now: number) => void)[] = [];
 
   constructor(
@@ -88,6 +95,15 @@ export class App {
     this.shell.loading.hidden = true;
     this.shell.error.hidden = true;
     this.stage.home();
+    if (!this.reducedMotion) {
+      // Swoop in over the outskirts to the establishing shot.
+      const cam = this.stage.camera.position;
+      const toPos = cam.clone();
+      const toTarget = this.stage.controls.target.clone();
+      cam.set(-1700, 1250, 2300);
+      this.stage.controls.target.set(-200, 0, 300);
+      void this.moveCamera(toPos, toTarget, 3800);
+    }
     for (const fn of this.cityListeners) fn(this);
   }
 
@@ -172,6 +188,16 @@ export class App {
     });
   }
 
+  /** Jump to the end of any camera move in progress (used by the deterministic test hooks). */
+  finishMove(): void {
+    const m = this.move;
+    if (!m) return;
+    this.stage.camera.position.copy(m.toPos);
+    this.stage.controls.target.copy(m.toTarget);
+    this.move = null;
+    m.resolve();
+  }
+
   cancelMove(): void {
     if (!this.move) return;
     const r = this.move.resolve;
@@ -234,9 +260,25 @@ export class App {
   }
 
   private bindKeys(): void {
+    window.addEventListener("keyup", (e) => {
+      this.held.delete(e.key.toLowerCase());
+      this.boost = e.shiftKey;
+    });
+    window.addEventListener("blur", () => this.held.clear());
     window.addEventListener("keydown", (e) => {
       const target = e.target as HTMLElement | null;
       const typing = target?.closest("input, select, textarea, [contenteditable]") !== null;
+      const k = e.key.toLowerCase();
+      this.boost = e.shiftKey;
+      if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && FLY_KEYS.has(k)) {
+        if (!this.held.has(k)) {
+          this.cancelMove();
+          for (const fn of this.flyListeners) fn();
+        }
+        this.held.add(k);
+        e.preventDefault();
+        return;
+      }
       if (e.key === "Escape") {
         if (!this.shell.panel.hidden) this.select(-1);
         return;
@@ -318,8 +360,38 @@ export class App {
     this.stage.render();
   };
 
+  /** Free-roam: slide the camera and its target together over the city, or turn around it. */
+  private fly(dt: number, boost: boolean): void {
+    const h = this.held;
+    if (!h.has("w") && !h.has("a") && !h.has("s") && !h.has("d") && !h.has("q") && !h.has("e")) return;
+    const cam = this.stage.camera.position;
+    const target = this.stage.controls.target;
+    const offset = cam.clone().sub(target);
+    const forward = offset.clone().multiplyScalar(-1).setY(0);
+    if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+    forward.normalize();
+    const right = new Vector3(-forward.z, 0, forward.x);
+    const speed = Math.max(40, offset.length() * 0.7) * (boost ? 3 : 1) * dt;
+    const move = new Vector3();
+    if (h.has("w")) move.add(forward);
+    if (h.has("s")) move.sub(forward);
+    if (h.has("d")) move.add(right);
+    if (h.has("a")) move.sub(right);
+    if (move.lengthSq() > 0) {
+      move.normalize().multiplyScalar(speed);
+      cam.add(move);
+      target.add(move);
+    }
+    const turn = (h.has("e") ? 1 : 0) - (h.has("q") ? 1 : 0);
+    if (turn) {
+      offset.applyAxisAngle(new Vector3(0, 1, 0), -turn * 1.4 * dt);
+      cam.copy(target).add(offset);
+    }
+  }
+
   private step(dt: number, now: number): void {
     this.clock += dt;
+    this.fly(dt, this.boost);
     this.timeline?.update(dt);
     for (const fn of this.frameListeners) fn(dt, now);
     if (this.move) {
@@ -336,6 +408,7 @@ export class App {
     this.stage.controls.update();
     this.stage.clampTarget();
     this.view?.setClock(this.clock);
+    this.stage.setClock(this.clock);
     this.updateHover();
   }
 
