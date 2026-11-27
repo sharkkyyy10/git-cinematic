@@ -19,3 +19,5 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci && npx playwright install --with-deps chromium && npm run check
+      - name: Install the packed CLI and run it through npx
+        run: npm run smoke:pack

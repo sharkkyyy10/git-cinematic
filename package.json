@@ -20,7 +20,8 @@
     "demo": "node packages/core/dist/demo-cli.js packages/viewer/public/demo/city.bin",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run e2e",
     "deploy": "npm run build && bash scripts/deploy.sh packages/viewer/dist",
-    "deploy:dry": "npm run build && bash scripts/deploy.sh packages/viewer/dist --dry-run"
+    "deploy:dry": "npm run build && bash scripts/deploy.sh packages/viewer/dist --dry-run",
+    "smoke:pack": "bash scripts/pack-smoke.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.9",
