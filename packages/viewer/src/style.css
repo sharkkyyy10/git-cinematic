@@ -9,7 +9,9 @@
   --accent: #6ea8ff;
   --fire: #ff7a3d;
   --focus: #ffd166;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--sans);
   font-size: 14px;
 }
 * {
@@ -68,7 +70,7 @@ button.primary {
   display: none;
 }
 code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 0.92em;
   background: rgba(110, 168, 255, 0.12);
   padding: 1px 5px;
@@ -98,14 +100,21 @@ code {
   flex: 1;
 }
 .wordmark {
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  font-size: 17px;
-  background: linear-gradient(90deg, #ffb36b, #ff6b3d 40%, #6ea8ff);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-size: 16px;
+  color: #f2f5fb;
   white-space: nowrap;
+}
+.wordmark::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 8px;
+  border-radius: 2px;
+  background: var(--fire);
+  vertical-align: 1px;
 }
 .repo {
   color: var(--muted);
@@ -150,7 +159,7 @@ code {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 12.5px;
 }
 .search-results li[aria-selected="true"],
@@ -168,7 +177,7 @@ code {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 6px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -196,7 +205,7 @@ code {
   flex: 1;
   margin: 0 0 12px;
   font-size: 13px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   word-break: break-all;
   font-weight: 600;
 }
@@ -315,15 +324,17 @@ code {
   animation: card 2.5s ease both;
 }
 .title-card .kind {
-  font-size: 13px;
-  letter-spacing: 0.24em;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
 .title-card h2 {
   margin: 6px 0;
   font-size: clamp(22px, 3.4vw, 40px);
-  font-weight: 750;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 .title-card .range {
   color: var(--muted);
@@ -411,10 +422,9 @@ code {
   left: 0;
   opacity: 0;
   white-space: nowrap;
-  text-transform: uppercase;
-  font-weight: 700;
-  letter-spacing: 0.32em;
-  color: rgba(225, 235, 255, 0.82);
+  font-family: var(--mono);
+  font-weight: 500;
+  color: rgba(225, 235, 255, 0.86);
   text-shadow:
     0 0 6px rgba(4, 6, 12, 0.95),
     0 0 18px rgba(110, 168, 255, 0.35);
@@ -423,9 +433,13 @@ code {
 .label.depth-1 {
   font-size: 13px;
 }
+.label.depth-1::before {
+  content: "/";
+  color: var(--fire);
+  margin-right: 2px;
+}
 .label.depth-2 {
-  font-size: 10.5px;
-  letter-spacing: 0.24em;
+  font-size: 11px;
   color: rgba(255, 200, 140, 0.8);
   text-shadow:
     0 0 6px rgba(4, 6, 12, 0.95),
@@ -461,7 +475,7 @@ code {
   place-items: center;
   border-radius: 50%;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   color: #07101f;
   background: var(--focus);
   box-shadow: 0 0 10px rgba(255, 209, 102, 0.6);
@@ -505,7 +519,7 @@ code {
   width: 24px;
   height: 24px;
   border-radius: 7px;
-  font-weight: 800;
+  font-weight: 700;
   color: #07101f;
 }
 .grade.big {
@@ -609,8 +623,10 @@ code {
 }
 .drawer h3 {
   margin: 18px 0 8px;
+  font-family: var(--mono);
   font-size: 11px;
-  letter-spacing: 0.18em;
+  font-weight: 500;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -631,7 +647,7 @@ code {
 }
 .score {
   font-size: 40px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -693,8 +709,9 @@ code {
 .sev {
   flex: none;
   font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
   padding: 2px 6px;
   border-radius: 5px;
@@ -734,7 +751,7 @@ code {
   background: rgba(10, 15, 28, 0.6);
 }
 .file-link .path {
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
