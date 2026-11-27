@@ -134,3 +134,69 @@ test("playback shows era title cards and Space toggles play", async ({ page }) =
   await page.keyboard.press("Space");
   await expect(page.getByRole("button", { name: "Play" })).toBeVisible();
 });
+
+test("the guide explains every colour and highlights the matching buildings", async ({ page }) => {
+  const errors = collectErrors(page);
+  await openDemo(page);
+  const before = await page.evaluate(() => window.__gc.fingerprint());
+  await page.keyboard.press("?");
+  const drawer = page.getByTestId("drawer");
+  await expect(drawer).toBeVisible();
+  for (const text of ["Fire", "Lit windows", "Blue rim", "Ambience", "Timeline chapters", "Fix wave"]) {
+    await expect(drawer).toContainText(text);
+  }
+  const show = drawer.locator(".guide-item .chip:not([disabled])", { hasText: /^Show \d/ }).first();
+  await show.click();
+  await expect(page.locator(".legend")).toContainText("Clear");
+  expect(await page.evaluate(() => window.__gc.fingerprint())).not.toBe(before);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".legend")).not.toContainText("Clear");
+  expect(await page.evaluate(() => window.__gc.fingerprint())).toBe(before);
+  expect(errors).toEqual([]);
+});
+
+test("lenses recolour the city and the cinematic view comes back unchanged", async ({ page }) => {
+  await openDemo(page);
+  const cinematic = await page.evaluate(() => window.__gc.fingerprint());
+  const seen = new Set([cinematic]);
+  for (const key of ["2", "3", "5", "6"]) {
+    await page.keyboard.press(key);
+    seen.add(await page.evaluate(() => window.__gc.fingerprint()));
+  }
+  expect(seen.size).toBe(5);
+  await expect(page.locator(".lensbar [aria-pressed=true]")).toHaveText("Age");
+  await expect(page.locator(".legend")).toContainText("untouched for longest");
+  await page.locator(".lensbar button", { hasText: "Cinematic" }).click();
+  expect(await page.evaluate(() => window.__gc.fingerprint())).toBe(cinematic);
+});
+
+test("insights show a health score and findings that fly to their files", async ({ page }) => {
+  await openDemo(page);
+  await expect(page.getByTestId("health-pill")).toContainText(/Health \d+/);
+  await page.getByTestId("health-pill").click();
+  await expect(page.getByTestId("health-score")).toHaveText(/^\d{1,3}$/);
+  const findings = page.locator("[data-finding]");
+  expect(await findings.count()).toBeGreaterThanOrEqual(3);
+  const link = findings.first().locator(".file-link").first();
+  const path = await link.getAttribute("title");
+  await link.click();
+  await expect(page.getByTestId("panel-path")).toHaveText(path ?? "");
+  await expect(page.getByTestId("panel")).toContainText("Flags");
+  await expect(page.getByTestId("panel")).not.toContainText(/Flags\s*none/);
+});
+
+test("the report downloads as Markdown", async ({ page }) => {
+  await openDemo(page);
+  await page.keyboard.press("i");
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Download report (.md)" }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe("acme-platform-demo-report.md");
+  const path = await download.path();
+  const { readFileSync } = await import("node:fs");
+  const text = readFileSync(path, "utf8");
+  expect(text).toMatch(/^# acme-platform \(demo\): codebase report/);
+  expect(text).toMatch(/## Health: \d+\/100 \(grade [A-E]\)/);
+  expect(text).toContain("## Findings");
+});

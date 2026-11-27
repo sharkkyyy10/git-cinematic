@@ -43,6 +43,7 @@ precision highp usampler2D;
 in vec4 aFootprint; // x, z, w, d
 in float aFile;
 in vec2 aStatic;    // centrality, authors
+in float aLens;     // value of the active lens, 0..1
 
 uniform usampler2D uHistory;
 uniform float uTime;
@@ -59,6 +60,7 @@ out float vHeight;
 out float vSelect;
 out float vSeed;
 out vec2 vFoot;
+out float vLens;
 
 uvec2 historyAt(int index) {
   return texelFetch(uHistory, ivec2(index % ${HISTORY_WIDTH}, index / ${HISTORY_WIDTH}), 0).rg;
@@ -88,6 +90,7 @@ void main() {
   vHeight = h;
   vSeed = aFile;
   vFoot = aFootprint.zw;
+  vLens = aLens;
   vSelect = abs(aFile - uSelected) < 0.5 ? 1.0 : (abs(aFile - uHovered) < 0.5 ? 0.5 : 0.0);
   gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
 }
@@ -100,6 +103,8 @@ uniform float uClock;
 uniform float uFlicker;
 uniform vec3 uFogColor;
 uniform float uFogDensity;
+uniform float uLens;
+uniform float uLensMode;
 
 layout(location = 0) out highp vec4 fragColor;
 
@@ -112,8 +117,21 @@ in float vHeight;
 in float vSelect;
 in float vSeed;
 in vec2 vFoot;
+in float vLens;
 
 ${common}
+
+// Lens ramp: slate, teal, amber, red. Readable for the common colour-vision deficiencies
+// because brightness rises with the value as well as hue.
+vec3 lensRamp(float v) {
+  vec3 c0 = vec3(0.05, 0.09, 0.16);
+  vec3 c1 = vec3(0.0, 0.55, 0.62);
+  vec3 c2 = vec3(1.0, 0.72, 0.12);
+  vec3 c3 = vec3(1.0, 0.16, 0.08);
+  if (v < 0.33) return mix(c0, c1, v / 0.33);
+  if (v < 0.66) return mix(c1, c2, (v - 0.33) / 0.33);
+  return mix(c2, c3, (v - 0.66) / 0.34);
+}
 
 // Inferno colour map, polynomial fit.
 vec3 inferno(float t) {
@@ -204,6 +222,17 @@ void main() {
   if (vCentrality > 0.7 && vHeat < 0.1) {
     float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
     color += vec3(0.12, 0.42, 1.0) * rim * 1.1 + vec3(0.004, 0.012, 0.03);
+  }
+
+  if (uLens > 0.5) {
+    float v = clamp(vLens, 0.0, 1.0);
+    float shade = 0.55 + 0.45 * diffuse + 0.25 * step(0.5, up);
+    vec3 ghost = vec3(0.016, 0.02, 0.032) * shade;
+    // Only the top of the scale is bright enough to bloom, so the worst files stand out.
+    vec3 lit = uLensMode > 0.5
+      ? vec3(0.25, 0.85, 1.0) * 1.1
+      : lensRamp(v) * (0.1 + 0.42 * v) + lensRamp(v) * smoothstep(0.82, 1.0, v) * 0.9;
+    color = (v <= 0.002 ? ghost : lit * shade) + color * 0.06;
   }
 
   color += vSelect * vec3(0.2, 0.55, 1.0) * (0.35 + 0.35 * step(0.9, vSelect));

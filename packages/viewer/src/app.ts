@@ -1,11 +1,22 @@
 import { type City, FILE_BINARY, FILE_DELETED, hotspots } from "@git-cinematic/core/format";
+import { type Finding, fileSignals, findings, type Signals } from "@git-cinematic/core/insights";
 import { Vector3 } from "three";
 import { CityView } from "./city.js";
 import { LoadError, loadCityFile, type Source } from "./load.js";
 import { pickBuilding } from "./picking.js";
 import { BACKGROUND, FOG_DENSITY, type Stage } from "./scene.js";
 import { Timeline } from "./timeline.js";
-import { el, fmtInt, type Shell, setStats, showError } from "./ui.js";
+import { el, fmtDate, fmtInt, type Shell, setStats, showError } from "./ui.js";
+
+const FLAG_NAMES: Record<Finding["id"], string> = {
+  hotspots: "Hotspot",
+  fire: "On fire now",
+  bugs: "Bug-prone",
+  silos: "Knowledge silo",
+  coupling: "Change magnet",
+  dormant: "Dormant giant",
+  solo: "Single author",
+};
 
 const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e"]);
 
@@ -30,6 +41,10 @@ export class App {
   /** Hotspot rank per file (1-based), 0 when the file has no score. */
   hotspotRank = new Uint32Array(0);
   hotspotOrder: number[] = [];
+  /** Lens values and last-change buckets for the current city. */
+  signals: Signals | null = null;
+  /** Plain-language findings for the current city, most severe first. */
+  found: Finding[] = [];
   selected = -1;
   frozen = false;
   readonly reducedMotion: boolean;
@@ -89,6 +104,8 @@ export class App {
     this.hotspotOrder.forEach((index, r) => {
       this.hotspotRank[index] = r + 1;
     });
+    this.signals = fileSignals(city);
+    this.found = findings(city, this.signals);
     this.select(-1);
     this.shell.repo.textContent = city.repoName;
     document.title = `Git-Cinematic · ${city.repoName}`;
@@ -151,8 +168,22 @@ export class App {
       ["Authors", fmtInt(f.authors)],
       ["Centrality", f.centrality.toFixed(2)],
       ["Hotspot rank", rank ? `#${rank} of ${fmtInt(this.hotspotOrder.length)}` : "—"],
+      ["Last changed", this.lastChanged(index)],
+      ["Flags", this.flagsFor(index)],
     ]);
     this.shell.panel.hidden = false;
+  }
+
+  private lastChanged(index: number): string {
+    const b = this.signals?.lastChange[index] ?? -1;
+    const start = b >= 0 ? this.city?.bucketStart[b] : undefined;
+    return start === undefined ? "—" : fmtDate(start);
+  }
+
+  /** The findings that name this file, e.g. "Hotspot · Knowledge silo". */
+  flagsFor(index: number): string {
+    const names = this.found.filter((f) => f.files.includes(index)).map((f) => FLAG_NAMES[f.id]);
+    return names.length ? names.join(" · ") : "none";
   }
 
   /** Smoothly move the camera to frame a building. */

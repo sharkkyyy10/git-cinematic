@@ -66,6 +66,8 @@ export class CityView {
     box.setAttribute("aFootprint", new InstancedBufferAttribute(footprint, 4));
     box.setAttribute("aFile", new InstancedBufferAttribute(fileIndex, 1));
     box.setAttribute("aStatic", new InstancedBufferAttribute(stat, 2));
+    this.lensValues = new InstancedBufferAttribute(new Float32Array(Math.max(F, 1)), 1);
+    box.setAttribute("aLens", this.lensValues);
 
     this.material = new ShaderMaterial({
       glslVersion: GLSL3,
@@ -79,6 +81,8 @@ export class CityView {
         uHovered: { value: -1 },
         uClock: { value: 0 },
         uFlicker: { value: 1 },
+        uLens: { value: 0 },
+        uLensMode: { value: 0 },
         uFogColor: { value: fogColor },
         uFogDensity: { value: fogDensity },
       },
@@ -101,6 +105,25 @@ export class CityView {
 
   /** Roads, traffic, lamps, beacons and embers. */
   readonly streets: Group;
+  /** Per-building value for the active lens or highlight, 0..1. */
+  private readonly lensValues: InstancedBufferAttribute;
+
+  /**
+   * Recolour the city: "ramp" maps each value through the lens colour ramp, "mask" lights up the
+   * buildings with a value of 1 and dims the rest, and null returns to the cinematic look.
+   */
+  setLens(values: ArrayLike<number> | null, mode: "ramp" | "mask" = "ramp"): void {
+    const u = this.material.uniforms as Record<string, { value: number }>;
+    if (!values) {
+      (u.uLens as { value: number }).value = 0;
+      return;
+    }
+    const arr = this.lensValues.array as Float32Array;
+    for (let i = 0; i < arr.length; i++) arr[i] = Math.min(1, Math.max(0, values[i] ?? 0));
+    this.lensValues.needsUpdate = true;
+    (u.uLens as { value: number }).value = 1;
+    (u.uLensMode as { value: number }).value = mode === "mask" ? 1 : 0;
+  }
 
   private addPlates(): void {
     const dirs = this.city.dirs;
